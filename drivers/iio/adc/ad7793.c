@@ -148,6 +148,7 @@ static struct ad7793_platform_data ad7793_default_pdata = {
 	.boost_enable = false,
 	.buffered = true,
 	.unipolar = true,
+	.auto_calibration = false,
 	.refsel = AD7793_REFSEL_INTERNAL,
 	.bias_voltage = AD7793_BIAS_VOLTAGE_DISABLED,
 	.exitation_current = AD7793_IX_DISABLED,
@@ -172,6 +173,7 @@ struct ad7793_state {
 	u16				mode;
 	u16				conf;
 	u32				scale_avail[8][2];
+	bool				auto_calibration;
 
 	struct ad_sigma_delta		sd;
 
@@ -338,9 +340,11 @@ static int ad7793_setup(struct iio_dev *indio_dev,
 			goto out;
 	}
 
-	ret = ad7793_calibrate_all(st);
-	if (ret)
-		goto out;
+	if (pdata->auto_calibration) {
+		ret = ad7793_calibrate_all(st);
+		if (ret)
+			goto out;
+	}
 
 	/* Populate available ADC input ranges */
 	for (i = 0; i < ARRAY_SIZE(st->scale_avail); i++) {
@@ -479,7 +483,6 @@ static int ad7793_read_raw(struct iio_dev *indio_dev,
 			return ret;
 
 		return IIO_VAL_INT;
-
 	case IIO_CHAN_INFO_SCALE:
 		switch (chan->type) {
 		case IIO_VOLTAGE:
@@ -522,8 +525,42 @@ static int ad7793_read_raw(struct iio_dev *indio_dev,
 			*val -= offset;
 		}
 		return IIO_VAL_INT;
+	case IIO_CHAN_INFO_CALIBBIAS:
+		ret = iio_device_claim_direct_mode(indio_dev);
+		if (ret < 0)
+			return ret;
+
+		ret = ad7793_set_channel(&st->sd, 0, chan->address);
+		if (ret < 0)
+			break;
+
+		ret = ad_sd_read_reg(&st->sd, AD7793_REG_OFFSET,
+			DIV_ROUND_UP(chan->scan_type.realbits
+			+ chan->scan_type.shift, 8), val);
+		break;
+	case IIO_CHAN_INFO_CALIBSCALE:
+		ret = iio_device_claim_direct_mode(indio_dev);
+		if (ret < 0)
+			return ret;
+
+		ret = ad7793_set_channel(&st->sd, 0, chan->address);
+		if (ret < 0)
+			break;
+
+		ret = ad_sd_read_reg(&st->sd, AD7793_REG_FULLSCALE,
+			DIV_ROUND_UP(chan->scan_type.realbits
+			+ chan->scan_type.shift, 8), val);
+		break;
+
+	default:
+		return -EINVAL;
 	}
-	return -EINVAL;
+
+	iio_device_release_direct_mode(indio_dev);
+	if (ret)
+		return ret;
+
+	return IIO_VAL_INT;
 }
 
 static int ad7793_write_raw(struct iio_dev *indio_dev,
@@ -555,9 +592,38 @@ static int ad7793_write_raw(struct iio_dev *indio_dev,
 
 				ad_sd_write_reg(&st->sd, AD7793_REG_CONF,
 						sizeof(st->conf), st->conf);
-				ad7793_calibrate_all(st);
+
+				if (st->auto_calibration)
+					ad7793_calibrate_all(st);
+
 				break;
 			}
+		break;
+	case IIO_CHAN_INFO_CALIBBIAS:
+		ret = ad7793_set_mode(&st->sd, AD_SD_MODE_IDLE);
+		if (ret < 0)
+			break;
+
+		ret = ad7793_set_channel(&st->sd, 0, chan->address);
+		if (ret < 0)
+			break;
+
+		ret = ad_sd_write_reg(&st->sd, AD7793_REG_OFFSET,
+			DIV_ROUND_UP(chan->scan_type.realbits
+			+ chan->scan_type.shift, 8), val);
+		break;
+	case IIO_CHAN_INFO_CALIBSCALE:
+		ret = ad7793_set_mode(&st->sd, AD_SD_MODE_IDLE);
+		if (ret < 0)
+			break;
+
+		ret = ad7793_set_channel(&st->sd, 0, chan->address);
+		if (ret < 0)
+			break;
+
+		ret = ad_sd_write_reg(&st->sd, AD7793_REG_FULLSCALE,
+			DIV_ROUND_UP(chan->scan_type.realbits
+			+ chan->scan_type.shift, 8), val);
 		break;
 	default:
 		ret = -EINVAL;
@@ -605,12 +671,18 @@ const struct iio_chan_spec _name##_channels[] = { \
 
 #define DECLARE_AD7795_CHANNELS(_name, _b, _sb) \
 const struct iio_chan_spec _name##_channels[] = { \
-	AD_SD_DIFF_CHANNEL(0, 0, 0, AD7793_CH_AIN1P_AIN1M, (_b), (_sb), 0), \
-	AD_SD_DIFF_CHANNEL(1, 1, 1, AD7793_CH_AIN2P_AIN2M, (_b), (_sb), 0), \
-	AD_SD_DIFF_CHANNEL(2, 2, 2, AD7793_CH_AIN3P_AIN3M, (_b), (_sb), 0), \
-	AD_SD_DIFF_CHANNEL(3, 3, 3, AD7795_CH_AIN4P_AIN4M, (_b), (_sb), 0), \
-	AD_SD_DIFF_CHANNEL(4, 4, 4, AD7795_CH_AIN5P_AIN5M, (_b), (_sb), 0), \
-	AD_SD_DIFF_CHANNEL(5, 5, 5, AD7795_CH_AIN6P_AIN6M, (_b), (_sb), 0), \
+	AD_SD_DIFF_CHANNEL_WITH_CALIB(0, 0, 0, AD7793_CH_AIN1P_AIN1M, \
+		(_b), (_sb), 0), \
+	AD_SD_DIFF_CHANNEL_WITH_CALIB(1, 1, 1, AD7793_CH_AIN2P_AIN2M, \
+		(_b), (_sb), 0), \
+	AD_SD_DIFF_CHANNEL_WITH_CALIB(2, 2, 2, AD7793_CH_AIN3P_AIN3M, \
+		(_b), (_sb), 0), \
+	AD_SD_DIFF_CHANNEL_WITH_CALIB(3, 3, 3, AD7795_CH_AIN4P_AIN4M, \
+		(_b), (_sb), 0), \
+	AD_SD_DIFF_CHANNEL_WITH_CALIB(4, 4, 4, AD7795_CH_AIN5P_AIN5M, \
+		(_b), (_sb), 0), \
+	AD_SD_DIFF_CHANNEL_WITH_CALIB(5, 5, 5, AD7795_CH_AIN6P_AIN6M, \
+		(_b), (_sb), 0), \
 	AD_SD_SHORTED_CHANNEL(6, 0, AD7795_CH_AIN1M_AIN1M, (_b), (_sb), 0), \
 	AD_SD_TEMP_CHANNEL(7, AD7793_CH_TEMP, (_b), (_sb), 0), \
 	AD_SD_SUPPLY_CHANNEL(8, 3, AD7793_CH_AVDD_MONITOR, (_b), (_sb), 0), \
@@ -777,6 +849,7 @@ static struct ad7793_platform_data *ad7793_parse_dt(struct device *dev)
 	pdata->boost_enable = of_property_read_bool(np, "adi,boost-enable");
 	pdata->buffered = of_property_read_bool(np, "adi,buffered-mode-enable");
 	pdata->unipolar = of_property_read_bool(np, "adi,unipolar-mode-enable");
+	pdata->auto_calibration = of_property_read_bool(np, "adi,auto-calibration-enable");
 	tmp = AD7793_REFSEL_INTERNAL;
 	of_property_read_u32(np, "adi,reference-select", &tmp);
 	pdata->refsel = tmp;
@@ -849,6 +922,8 @@ static int ad7793_probe(struct spi_device *spi)
 	} else {
 		vref_mv = 1170; /* Build-in ref */
 	}
+
+	st->auto_calibration = pdata->auto_calibration;
 
 	st->chip_info =
 		&ad7793_chip_info_tbl[spi_get_device_id(spi)->driver_data];
