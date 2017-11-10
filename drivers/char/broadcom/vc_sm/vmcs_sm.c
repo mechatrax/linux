@@ -218,32 +218,6 @@ static const char *const sm_cache_map_vector[] = {
 };
 #endif
 
-typedef void cache_flush_op_fn(const void *, const void *);
-
-#if defined(CONFIG_CPU_CACHE_V7)
-extern cache_flush_op_fn v7_dma_inv_range;
-extern cache_flush_op_fn v7_dma_clean_range;
-static cache_flush_op_fn * const flushops[4] =
-{
-	0,
-	v7_dma_inv_range,
-	v7_dma_clean_range,
-	v7_dma_flush_range,
-};
-#elif defined(CONFIG_CPU_CACHE_V6)
-extern cache_flush_op_fn v6_dma_inv_range;
-extern cache_flush_op_fn v6_dma_clean_range;
-static cache_flush_op_fn * const flushops[4] =
-{
-	0,
-	v6_dma_inv_range,
-	v6_dma_clean_range,
-	v6_dma_flush_range,
-};
-#else
-#error Unknown cache config
-#endif
-
 /* ---- Private Function Prototypes -------------------------------------- */
 
 /* ---- Private Functions ------------------------------------------------ */
@@ -573,8 +547,8 @@ static int vc_sm_global_state_show(struct seq_file *s, void *v)
 				   resource->attach);
 			seq_printf(s, "           SGT          %p\n",
 				   resource->sgt);
-			seq_printf(s, "           DMA_ADDR     0x%08X\n",
-				   resource->dma_addr);
+			seq_printf(s, "           DMA_ADDR     %pad\n",
+				   &resource->dma_addr);
 		}
 	}
 	seq_printf(s, "\n\nTotal resource count:   %d\n\n", resource_count);
@@ -2962,12 +2936,9 @@ static long vc_sm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			}
 			for (i = 0; i < sizeof(ioparam.s) / sizeof(*ioparam.s); i++) {
 				switch (ioparam.s[i].cmd) {
-				default:
-				case 0:
-					break; /* NOOP */
-				case 1:	/* L1/L2 invalidate virtual range */
-				case 2: /* L1/L2 clean physical range */
-				case 3: /* L1/L2 clean+invalidate all */
+				case VCSM_CACHE_OP_INV:	/* L1/L2 invalidate virtual range */
+				case VCSM_CACHE_OP_FLUSH: /* L1/L2 clean physical range */
+				case VCSM_CACHE_OP_CLEAN: /* L1/L2 clean+invalidate all */
 					/* Locate resource from GUID. */
 					resource =
 					    vmcs_sm_acquire_resource(file_data, ioparam.s[i].handle);
@@ -2991,6 +2962,8 @@ static long vc_sm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 						vmcs_sm_release_resource(resource, 0);
 
 					break;
+				default:
+					break; /* NOOP */
 				}
 			}
 		}
@@ -3027,7 +3000,22 @@ static long vc_sm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 				for (i = 0; i < ioparam.op_count; i++) {
 					const struct vmcs_sm_ioctl_clean_invalid_block * const op = block + i;
-					cache_flush_op_fn * const op_fn = flushops[op->invalidate_mode & 3];
+					void (*op_fn)(const void *, const void *);
+
+					switch(op->invalidate_mode & 3) {
+						case VCSM_CACHE_OP_INV:
+							op_fn = dmac_inv_range;
+							break;
+						case VCSM_CACHE_OP_CLEAN:
+							op_fn = dmac_clean_range;
+							break;
+						case VCSM_CACHE_OP_FLUSH:
+							op_fn = dmac_flush_range;
+							break;
+						default:
+							op_fn = 0;
+							break;
+					}
 
 					if ((op->invalidate_mode & ~3) != 0) {
 						ret = -EINVAL;

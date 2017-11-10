@@ -102,6 +102,7 @@ struct ad7793_platform_data {
 	bool boost_enable;
 	bool buffered;
 	bool unipolar;
+	bool auto_calibration;
 
 	enum ad7793_refsel refsel;
 	enum ad7793_bias_voltage bias_voltage;

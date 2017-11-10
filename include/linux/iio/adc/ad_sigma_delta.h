@@ -16,6 +16,8 @@ enum ad_sigma_delta_mode {
 	AD_SD_MODE_POWERDOWN = 3,
 };
 
+#define AD_SD_SLOT_DISABLE ((unsigned int)-1)
+
 /**
  * struct ad_sigma_delta_calib_data - Calibration data for Sigma Delta devices
  * @mode: Calibration mode.
@@ -32,6 +34,8 @@ struct iio_dev;
 /**
  * struct ad_sigma_delta_info - Sigma Delta driver specific callbacks and options
  * @set_channel: Will be called to select the current channel, may be NULL.
+ * @prepare_channel: Will be called to prepare and configure a channel, may be
+ *                   NULL.
  * @set_mode: Will be called to select the current mode, may be NULL.
  * @postprocess_sample: Is called for each sampled data word, can be used to
  *		modify or drop the sample data, it, may be NULL.
@@ -39,20 +43,27 @@ struct iio_dev;
  *		if there is just one read-only sample data shift register.
  * @addr_shift: Shift of the register address in the communications register.
  * @read_mask: Mask for the communications register having the read bit set.
+ * @data_reg: Address of the data register, if 0 the default address of 0x3 will
+ *   be used.
  */
 struct ad_sigma_delta_info {
-	int (*set_channel)(struct ad_sigma_delta *, unsigned int channel);
+	int (*set_channel)(struct ad_sigma_delta *, unsigned int slot,
+		unsigned int channel);
+	int (*prepare_channel)(struct ad_sigma_delta *, unsigned int slot,
+		const struct iio_chan_spec *);
 	int (*set_mode)(struct ad_sigma_delta *, enum ad_sigma_delta_mode mode);
 	int (*postprocess_sample)(struct ad_sigma_delta *, unsigned int raw_sample);
 	bool has_registers;
 	unsigned int addr_shift;
 	unsigned int read_mask;
+	unsigned int data_reg;
 };
 
 /**
  * struct ad_sigma_delta - Sigma Delta device struct
  * @spi: The spi device associated with the Sigma Delta device.
  * @trig: The IIO trigger associated with the Sigma Delta device.
+ * @num_slots: Number of sequencer slots
  *
  * Most of the fields are private to the sigma delta library code and should not
  * be accessed by individual drivers.
@@ -61,32 +72,49 @@ struct ad_sigma_delta {
 	struct spi_device	*spi;
 	struct iio_trigger	*trig;
 
+	unsigned int		num_slots;
+
 /* private: */
 	struct completion	completion;
 	bool			irq_dis;
 
 	bool			bus_locked;
+	bool			keep_cs_asserted;
 
 	uint8_t			comm;
 
 	const struct ad_sigma_delta_info *info;
+	unsigned int		active_slots;
+	unsigned int		current_slot;
+
+	struct spi_message	spi_msg;
+	struct spi_transfer	spi_transfer[2];
+	uint8_t			*buf_data;
 
 	/*
 	 * DMA (thus cache coherency maintenance) requires the
 	 * transfer buffers to live in their own cache lines.
 	 */
-	uint8_t				data[4] ____cacheline_aligned;
+	uint8_t				reg_data[4] ____cacheline_aligned;
 };
 
-static inline int ad_sigma_delta_set_channel(struct ad_sigma_delta *sd,
-	unsigned int channel)
+static inline int ad_sigma_delta_prepare_channel(struct ad_sigma_delta *sd,
+	unsigned int slot, const struct iio_chan_spec *chan)
 {
-	if (sd->info->set_channel)
-		return sd->info->set_channel(sd, channel);
+	if (sd->info->prepare_channel)
+		return sd->info->prepare_channel(sd, slot, chan);
 
 	return 0;
 }
 
+static inline int ad_sigma_delta_set_channel(struct ad_sigma_delta *sd,
+	unsigned int slot, unsigned int channel)
+{
+	if (sd->info->set_channel)
+		return sd->info->set_channel(sd, slot, channel);
+
+	return 0;
+}
 static inline int ad_sigma_delta_set_mode(struct ad_sigma_delta *sd,
 	unsigned int mode)
 {
@@ -110,6 +138,9 @@ int ad_sd_write_reg(struct ad_sigma_delta *sigma_delta, unsigned int reg,
 	unsigned int size, unsigned int val);
 int ad_sd_read_reg(struct ad_sigma_delta *sigma_delta, unsigned int reg,
 	unsigned int size, unsigned int *val);
+
+int ad_sd_reset(struct ad_sigma_delta *sigma_delta,
+	unsigned int reset_length);
 
 int ad_sigma_delta_single_conversion(struct iio_dev *indio_dev,
 	const struct iio_chan_spec *chan, int *val);
@@ -169,5 +200,41 @@ int ad_sd_validate_trigger(struct iio_dev *indio_dev, struct iio_trigger *trig);
 	_shift) \
 	__AD_SD_CHANNEL(_si, _channel, -1, _address, _bits, \
 		_storagebits, _shift, "supply", IIO_VOLTAGE)
+#if 1
+#define __AD_SD_CHANNEL_WITH_CALIB(_si, _channel1, _channel2, _address, \
+	_bits, _storagebits, _shift, _extend_name, _type) \
+	{ \
+		.type = (_type), \
+		.differential = (_channel2 == -1 ? 0 : 1), \
+		.indexed = 1, \
+		.channel = (_channel1), \
+		.channel2 = (_channel2), \
+		.address = (_address), \
+		.extend_name = (_extend_name), \
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) | \
+			BIT(IIO_CHAN_INFO_OFFSET) | \
+			BIT(IIO_CHAN_INFO_CALIBSCALE) | \
+			BIT(IIO_CHAN_INFO_CALIBBIAS), \
+		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE), \
+		.scan_index = (_si), \
+		.scan_type = { \
+			.sign = 'u', \
+			.realbits = (_bits), \
+			.storagebits = (_storagebits), \
+			.shift = (_shift), \
+			.endianness = IIO_BE, \
+		}, \
+	}
+
+#define AD_SD_DIFF_CHANNEL_WITH_CALIB(_si, _channel1, _channel2, _address, \
+	_bits, _storagebits, _shift) \
+	__AD_SD_CHANNEL_WITH_CALIB(_si, _channel1, _channel2, _address, \
+		_bits, _storagebits, _shift, NULL, IIO_VOLTAGE)
+
+#define AD_SD_CHANNEL_WITH_CALIB(_si, _channel, _address, \
+	_bits, _storagebits, _shift) \
+	__AD_SD_CHANNEL_WITH_CALIB(_si, _channel, -1, _address, \
+		_bits, _storagebits, _shift, NULL, IIO_VOLTAGE)
+#endif
 
 #endif
