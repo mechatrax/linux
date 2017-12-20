@@ -200,7 +200,7 @@ int ad_sd_validate_trigger(struct iio_dev *indio_dev, struct iio_trigger *trig);
 	_shift) \
 	__AD_SD_CHANNEL(_si, _channel, -1, _address, _bits, \
 		_storagebits, _shift, "supply", IIO_VOLTAGE)
-#if 1
+
 #define __AD_SD_CHANNEL_WITH_CALIB(_si, _channel1, _channel2, _address, \
 	_bits, _storagebits, _shift, _extend_name, _type) \
 	{ \
@@ -235,6 +235,5 @@ int ad_sd_validate_trigger(struct iio_dev *indio_dev, struct iio_trigger *trig);
 	_bits, _storagebits, _shift) \
 	__AD_SD_CHANNEL_WITH_CALIB(_si, _channel, -1, _address, \
 		_bits, _storagebits, _shift, NULL, IIO_VOLTAGE)
-#endif
 
 #endif
