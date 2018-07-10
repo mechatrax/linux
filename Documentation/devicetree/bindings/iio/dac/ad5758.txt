@@ -1,0 +1,60 @@
+Analog Devices AD5758 DAC device driver
+
+Required properties for the AD5758:
+	- compatible: Must be "adi,ad5758"
+	- reg: SPI chip select number for the device
+	- spi-max-frequency: Max SPI frequency to use (< 50000000)
+	- spi-cpha: is the only mode that is supported
+
+Optional properties:
+
+ - reset-gpios : GPIO spec for the RESET pin. If specified, it will be
+ 		 asserted during driver probe.
+
+ - adi,dc-dc-mode: Mode of operation of the dc-to-dc converter
+		   The following values are currently supported:
+		   	* 0: DC-to-DC converter powered off
+			* 1: DPC current mode
+			* 2: DPC voltage mode
+			* 3: PPC current mode
+
+ - adi,dc-dc-ilim: The dc-to-dc converter current limit
+		   The following values are currently supported [mA]:
+		   	* 150
+			* 200
+			* 250
+			* 300
+			* 350
+			* 400
+
+ - adi,slew-time-us: The time it takes for the output to reach the full scale [uS]
+ 		     The supported range is between 133us up to 1023984375us
+
+ - adi,range: The output range
+	      The following values are currently supported:
+	      	* 0: 0 V to 5 V voltage range
+		* 1: 0 V to 10 V voltage range
+		* 2: ±5 V voltage range
+		* 3: ±10 V voltage range
+		* 8: 0 mA to 20 mA current range
+		* 9: 0 mA to 24 mA current range
+		* 10: 4 mA to 20 mA current range
+		* 11: ±20 mA current range
+		* 12: ±24 mA current range
+		* 13: −1 mA to +22 mA current range
+
+AD5758 Example:
+
+	ad5758@0 {
+		compatible = "adi,ad5758";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+		spi-cpha;
+
+		reset-gpios = <&gpio 22 0>;
+
+		adi,dc-dc-mode = <2>;
+		adi,dc-dc-ilim = <200>;
+		adi,slew-time-us = <125000>;
+		adi,range = <1>;
+	};

@@ -19,6 +19,16 @@ config AD5064
 	  To compile this driver as a module, choose M here: the
 	  module will be called ad5064.
 
+config AD5270
+	tristate "Analog Devices AD5270/1/2/4 Digital Potentiometers"
+	depends on (I2C || SPI)
+	help
+	  If you say yes here, you get support for the Analog Devices
+	  AD5270, AD5271, AD5272, AD5274 digital potentiometer chips.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called ad5270.
+
 config AD5360
 	tristate "Analog Devices AD5360/61/62/63/70/71/73 DAC driver"
 	depends on SPI
@@ -130,15 +140,31 @@ config LTC2632
 	  module will be called ltc2632.
 
 config AD5686
-	tristate "Analog Devices AD5686R/AD5685R/AD5684R DAC SPI driver"
+	tristate
+
+config AD5686_SPI
+	tristate "Analog Devices AD5686 and similar multi-channel DACs (SPI)"
 	depends on SPI
+	select AD5686
 	help
-	  Say yes here to build support for Analog Devices AD5686R, AD5685R,
-	  AD5684R, AD5791 Voltage Output Digital to
-	  Analog Converter.
+	  Say yes here to build support for Analog Devices AD5672R, AD5676, 
+	  AD5676R, AD5684, AD5684R, AD5684R, AD5685R, AD5686, AD5686R 
+	  Voltage Output Digital to Analog Converter.
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called ad5686.
+
+config AD5696_I2C
+	tristate "Analog Devices AD5696 and similar multi-channel DACs (I2C)"
+	depends on I2C
+	select AD5686
+	help
+	  Say yes here to build support for Analog Devices AD5671R, AD5675R, 
+	  AD5694, AD5694R, AD5695R, AD5696, AD5696R Voltage Output Digital to
+	  Analog Converter.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ad5696.
 
 config AD5755
 	tristate "Analog Devices AD5755/AD5755-1/AD5757/AD5735/AD5737 DAC driver"
@@ -150,6 +176,16 @@ config AD5755
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called ad5755.
+
+config AD5758
+	tristate "Analog Devices AD5758 DAC driver"
+	depends on SPI_MASTER
+	help
+	  Say yes here to build support for Analog Devices AD5758 single channel
+	  Digital to Analog Converter.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ad5758.
 
 config AD5761
 	tristate "Analog Devices AD5761/61R/21/21R DAC driver"
@@ -171,6 +207,16 @@ config AD5764
 	  To compile this driver as a module, choose M here: the
 	  module will be called ad5764.
 
+config AD5770R
+	tristate "Analog Devices AD5770R IDAC driver"
+	depends on SPI_MASTER
+	help
+	  Say yes here to build support for Analog Devices AD5770R Digital to
+	  Analog Converter.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ad5770r.
+
 config AD5791
 	tristate "Analog Devices AD5760/AD5780/AD5781/AD5790/AD5791 DAC SPI driver"
 	depends on SPI
@@ -185,6 +231,9 @@ config AD5791
 config AD7303
 	tristate "Analog Devices AD7303 DAC driver"
 	depends on SPI
+	select IIO_BUFFER
+	select IIO_TRIGGER
+	select IIO_TRIGGERED_BUFFER
 	help
 	  Say yes here to build support for Analog Devices AD7303 Digital to Analog
 	  Converters (DAC).
