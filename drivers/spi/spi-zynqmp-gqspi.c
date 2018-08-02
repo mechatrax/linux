@@ -833,7 +833,8 @@ static void zynq_qspi_setuprxdma(struct zynqmp_qspi *xqspi)
 	u64 dma_align =  (u64)(uintptr_t)xqspi->rxbuf;
 
 	if (((xqspi->bytes_to_receive < 8) || (xqspi->io_mode)) ||
-		((dma_align & GQSPI_DMA_UNALIGN) != 0x0)) {
+		((dma_align & GQSPI_DMA_UNALIGN) != 0x0) ||
+		is_vmalloc_addr(xqspi->rxbuf)) {
 		/* Setting to IO mode */
 		config_reg = zynqmp_gqspi_read(xqspi, GQSPI_CONFIG_OFST);
 		config_reg &= ~GQSPI_CFG_MODE_EN_MASK;
@@ -848,8 +849,10 @@ static void zynq_qspi_setuprxdma(struct zynqmp_qspi *xqspi)
 
 	addr = dma_map_single(xqspi->dev, (void *)xqspi->rxbuf,
 						rx_bytes, DMA_FROM_DEVICE);
-	if (dma_mapping_error(xqspi->dev, addr))
+	if (dma_mapping_error(xqspi->dev, addr)) {
 		dev_err(xqspi->dev, "ERR:rxdma:memory not mapped\n");
+		return;
+	}
 
 	xqspi->dma_rx_bytes = rx_bytes;
 	xqspi->dma_addr = addr;
@@ -1282,6 +1285,7 @@ static int zynqmp_qspi_probe(struct platform_device *pdev)
 	else
 		master->num_chipselect = num_cs;
 
+	dma_set_mask(&pdev->dev, DMA_BIT_MASK(44));
 	master->setup = zynqmp_qspi_setup;
 	master->set_cs = zynqmp_qspi_chipselect;
 	master->transfer_one = zynqmp_qspi_start_transfer;

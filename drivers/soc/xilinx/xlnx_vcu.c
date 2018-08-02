@@ -43,6 +43,7 @@
 #define VCU_BUFFER_B_FRAME		0x5c
 #define VCU_WPP_EN			0x60
 #define VCU_PLL_CLK_DEC			0x64
+#define VCU_NUM_CORE			0x6c
 #define VCU_GASKET_INIT			0x74
 #define VCU_GASKET_VALUE		0x03
 
@@ -318,6 +319,19 @@ u32 xvcu_get_clock_frequency(struct xvcu_device *xvcu)
 EXPORT_SYMBOL_GPL(xvcu_get_clock_frequency);
 
 /**
+ * xvcu_get_num_cores - read the number of core register
+ * @xvcu:	Pointer to the xvcu_device structure
+ *
+ * Return:	Returns 32bit value
+ *
+ */
+u32 xvcu_get_num_cores(struct xvcu_device *xvcu)
+{
+	return xvcu_read(xvcu->logicore_reg_ba, VCU_NUM_CORE);
+}
+EXPORT_SYMBOL_GPL(xvcu_get_num_cores);
+
+/**
  * xvcu_set_vcu_pll_info - Set the VCU PLL info
  * @xvcu:	Pointer to the xvcu_device structure
  *
@@ -338,6 +352,7 @@ static int xvcu_set_vcu_pll_info(struct xvcu_device *xvcu)
 	u32 divisor_mcu, divisor_core, fvco;
 	u32 clkoutdiv, vcu_pll_ctrl, pll_clk;
 	u32 cfg_val, mod, ctrl;
+	u32 fbdiv_max, fbdiv_min;
 	int ret, i;
 	const struct xvcu_pll_cfg *found = NULL;
 
@@ -368,6 +383,15 @@ static int xvcu_set_vcu_pll_info(struct xvcu_device *xvcu)
 
 	refclk = clk_get_rate(xvcu->pll_ref);
 
+	/* Calculate max and min possible FBDIV value */
+	fbdiv_max = FVCO_MAX / refclk;
+	if (fbdiv_max >= ARRAY_SIZE(xvcu_pll_cfg))
+		fbdiv_max = ARRAY_SIZE(xvcu_pll_cfg) - 1;
+
+	fbdiv_min = DIV_ROUND_UP(FVCO_MIN, refclk);
+	dev_dbg(xvcu->dev, "Maximum possible fbdiv value is %u\n", fbdiv_max);
+	dev_dbg(xvcu->dev, "Minimum possible fbdiv value is %u\n", fbdiv_min);
+
 	/*
 	 * The divide-by-2 should be always enabled (==1)
 	 * to meet the timing in the design.
@@ -381,32 +405,30 @@ static int xvcu_set_vcu_pll_info(struct xvcu_device *xvcu)
 		return -EINVAL;
 	}
 
-	for (i = ARRAY_SIZE(xvcu_pll_cfg) - 1; i >= 0; i--) {
+	for (i = fbdiv_max; i >= fbdiv_min; i--) {
 		const struct xvcu_pll_cfg *cfg = &xvcu_pll_cfg[i];
 
 		fvco = cfg->fbdiv * refclk;
-		if (fvco >= FVCO_MIN && fvco <= FVCO_MAX) {
-			pll_clk = fvco / VCU_PLL_DIV2;
-			if (fvco % VCU_PLL_DIV2 != 0)
-				pll_clk++;
-			mod = pll_clk % coreclk;
-			if (mod < LIMIT) {
-				divisor_core = pll_clk / coreclk;
-			} else if (coreclk - mod < LIMIT) {
-				divisor_core = pll_clk / coreclk;
-				divisor_core++;
-			} else {
-				continue;
-			}
-			if (divisor_core >= DIVISOR_MIN &&
-			    divisor_core <= DIVISOR_MAX) {
-				found = cfg;
-				divisor_mcu = pll_clk / mcuclk;
-				mod = pll_clk % mcuclk;
-				if (mcuclk - mod < LIMIT)
-					divisor_mcu++;
-				break;
-			}
+		pll_clk = fvco / VCU_PLL_DIV2;
+		if (fvco % VCU_PLL_DIV2 != 0)
+			pll_clk++;
+		mod = pll_clk % coreclk;
+		if (mod < LIMIT) {
+			divisor_core = pll_clk / coreclk;
+		} else if (coreclk - mod < LIMIT) {
+			divisor_core = pll_clk / coreclk;
+			divisor_core++;
+		} else {
+			continue;
+		}
+		if (divisor_core >= DIVISOR_MIN &&
+		    divisor_core <= DIVISOR_MAX) {
+			found = cfg;
+			divisor_mcu = pll_clk / mcuclk;
+			mod = pll_clk % mcuclk;
+			if (mod != 0)
+				divisor_mcu++;
+			break;
 		}
 	}
 

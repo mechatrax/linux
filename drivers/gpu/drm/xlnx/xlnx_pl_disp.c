@@ -312,7 +312,15 @@ static void xlnx_pl_disp_clear_event(struct drm_crtc *crtc)
 static void xlnx_pl_disp_crtc_atomic_enable(struct drm_crtc *crtc,
 					    struct drm_crtc_state *old_state)
 {
+	struct drm_display_mode *adjusted_mode = &crtc->state->adjusted_mode;
+	int vrefresh;
+
 	xlnx_pl_disp_plane_enable(crtc->primary);
+
+	/* Delay of 1 vblank interval for timing gen to be stable */
+	vrefresh = (adjusted_mode->clock * 1000) /
+		   (adjusted_mode->vtotal * adjusted_mode->htotal);
+	msleep(1 * 1000 / vrefresh);
 }
 
 static void xlnx_pl_disp_crtc_atomic_disable(struct drm_crtc *crtc,
@@ -473,7 +481,7 @@ static int xlnx_pl_disp_probe(struct platform_device *pdev)
 
 	xlnx_pl_disp->master = xlnx_drm_pipeline_init(pdev);
 	if (IS_ERR(xlnx_pl_disp->master)) {
-		ret = PTR_ERR(xlnx_pl_disp->dev);
+		ret = PTR_ERR(xlnx_pl_disp->master);
 		dev_err(dev, "failed to initialize the drm pipeline\n");
 		goto err_component;
 	}

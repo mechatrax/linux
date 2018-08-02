@@ -196,7 +196,8 @@ static struct ad7793_state *ad_sigma_delta_to_ad7793(struct ad_sigma_delta *sd)
 	return container_of(sd, struct ad7793_state, sd);
 }
 
-static int ad7793_set_channel(struct ad_sigma_delta *sd, unsigned int channel)
+static int ad7793_set_channel(struct ad_sigma_delta *sd, unsigned int slot,
+	unsigned int channel)
 {
 	struct ad7793_state *st = ad_sigma_delta_to_ad7793(sd);
 
@@ -327,7 +328,7 @@ static int ad7793_setup(struct iio_dev *indio_dev,
 	if (ret)
 		goto out;
 
-	ret = ad7793_set_channel(&st->sd, 0);
+	ret = ad7793_set_channel(&st->sd, 0, 0);
 	if (ret)
 		goto out;
 
@@ -482,7 +483,7 @@ static int ad7793_read_raw(struct iio_dev *indio_dev,
 		if (ret < 0)
 			return ret;
 
-		ret = ad7793_set_channel(&st->sd, chan->address);
+		ret = ad7793_set_channel(&st->sd, 0, chan->address);
 		if (ret < 0)
 			break;
 
@@ -495,7 +496,7 @@ static int ad7793_read_raw(struct iio_dev *indio_dev,
 		if (ret < 0)
 			return ret;
 
-		ret = ad7793_set_channel(&st->sd, chan->address);
+		ret = ad7793_set_channel(&st->sd, 0, chan->address);
 		if (ret < 0)
 			break;
 
@@ -576,7 +577,7 @@ static int ad7793_write_raw(struct iio_dev *indio_dev,
 		if (ret < 0)
 			break;
 
-		ret = ad7793_set_channel(&st->sd, chan->address);
+		ret = ad7793_set_channel(&st->sd, 0, chan->address);
 		if (ret < 0)
 			break;
 
@@ -589,7 +590,7 @@ static int ad7793_write_raw(struct iio_dev *indio_dev,
 		if (ret < 0)
 			break;
 
-		ret = ad7793_set_channel(&st->sd, chan->address);
+		ret = ad7793_set_channel(&st->sd, 0, chan->address);
 		if (ret < 0)
 			break;
 

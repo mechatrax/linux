@@ -767,7 +767,7 @@ static int ulite_probe(struct platform_device *pdev)
 	if (irq <= 0)
 		return -ENXIO;
 
-	pdata->clk = devm_clk_get(&pdev->dev, "ulite_clk");
+	pdata->clk = devm_clk_get(&pdev->dev, "s_axi_aclk");
 	if (IS_ERR(pdata->clk)) {
 		if (PTR_ERR(pdata->clk) != -ENOENT)
 			return PTR_ERR(pdata->clk);
@@ -779,13 +779,17 @@ static int ulite_probe(struct platform_device *pdev)
 		pdata->clk = NULL;
 	}
 
-	ret = clk_prepare(pdata->clk);
+	ret = clk_prepare_enable(pdata->clk);
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to prepare clock\n");
 		return ret;
 	}
 
-	return ulite_assign(&pdev->dev, id, res->start, irq, pdata);
+	ret = ulite_assign(&pdev->dev, id, res->start, irq, pdata);
+
+	clk_disable(pdata->clk);
+
+	return ret;
 }
 
 static int ulite_remove(struct platform_device *pdev)

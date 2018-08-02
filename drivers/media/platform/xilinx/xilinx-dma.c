@@ -67,7 +67,7 @@ static int xvip_dma_verify_format(struct xvip_dma *dma)
 	int width, height;
 
 	subdev = xvip_dma_remote_subdev(&dma->pad, &fmt.pad);
-	if (subdev == NULL)
+	if (!subdev)
 		return -EPIPE;
 
 	fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
@@ -105,7 +105,7 @@ static struct media_pad *xvip_get_entity_sink(struct media_entity *entity,
 	/* The source pad can be NULL when the entity has no source pad. Return
 	 * the first pad in that case, guaranteed to be a sink pad.
 	 */
-	if (source == NULL)
+	if (!source)
 		return &entity->pads[0];
 
 	/* Iterates through the pads to find a connected sink pad. */
@@ -127,21 +127,22 @@ static struct media_pad *xvip_get_entity_sink(struct media_entity *entity,
 
 /**
  * xvip_pipeline_start_stop - Start ot stop streaming on a pipeline
- * @pipe: The pipeline
+ * @xdev: Composite video device
+ * @dma: xvip dma
  * @start: Start (when true) or stop (when false) the pipeline
  *
- * Walk the entities chain starting at the pipeline output video node and start
- * or stop all of them.
+ * Walk the entities chain starting @dma and start or stop all of them
  *
  * Return: 0 if successful, or the return value of the failed video::s_stream
  * operation otherwise.
  */
-static int xvip_pipeline_start_stop(struct xvip_pipeline *pipe, bool start)
+static int xvip_pipeline_start_stop(struct xvip_composite_device *xdev,
+				    struct xvip_dma *dma, bool start)
 {
-	struct xvip_dma *dma = pipe->output;
 	struct media_entity *entity;
 	struct media_pad *pad;
 	struct v4l2_subdev *subdev;
+	bool is_streaming;
 	int ret;
 
 	entity = &dma->video.entity;
@@ -149,7 +150,7 @@ static int xvip_pipeline_start_stop(struct xvip_pipeline *pipe, bool start)
 
 	while (1) {
 		pad = xvip_get_entity_sink(entity, pad);
-		if (pad == NULL)
+		if (!pad)
 			break;
 
 		if (!(pad->flags & MEDIA_PAD_FL_SINK))
@@ -162,9 +163,21 @@ static int xvip_pipeline_start_stop(struct xvip_pipeline *pipe, bool start)
 		entity = pad->entity;
 		subdev = media_entity_to_v4l2_subdev(entity);
 
-		ret = v4l2_subdev_call(subdev, video, s_stream, start);
-		if (start && ret < 0 && ret != -ENOIOCTLCMD)
-			return ret;
+		is_streaming = xvip_subdev_set_streaming(xdev, subdev, start);
+
+		/*
+		 * start or stop the subdev only once in case if they are
+		 * shared between sub-graphs
+		 */
+		if (start != is_streaming) {
+			ret = v4l2_subdev_call(subdev, video, s_stream,
+					       start);
+			if (start && ret < 0 && ret != -ENOIOCTLCMD) {
+				dev_err(xdev->dev, "s_stream is failed on subdev\n");
+				xvip_subdev_set_streaming(xdev, subdev, !start);
+				return ret;
+			}
+		}
 	}
 
 	return 0;
@@ -180,7 +193,8 @@ static int xvip_pipeline_start_stop(struct xvip_pipeline *pipe, bool start)
  * independently, pipelines have a shared stream state that enable or disable
  * all entities in the pipeline. For this reason the pipeline uses a streaming
  * counter that tracks the number of DMA engines that have requested the stream
- * to be enabled.
+ * to be enabled. This will walk the graph starting from each DMA and enable or
+ * disable the entities in the path.
  *
  * When called with the @on argument set to true, this function will increment
  * the pipeline streaming count. If the streaming count reaches the number of
@@ -197,20 +211,31 @@ static int xvip_pipeline_start_stop(struct xvip_pipeline *pipe, bool start)
  */
 static int xvip_pipeline_set_stream(struct xvip_pipeline *pipe, bool on)
 {
+	struct xvip_composite_device *xdev;
+	struct xvip_dma *dma;
 	int ret = 0;
 
 	mutex_lock(&pipe->lock);
+	xdev = pipe->xdev;
 
 	if (on) {
 		if (pipe->stream_count == pipe->num_dmas - 1) {
-			ret = xvip_pipeline_start_stop(pipe, true);
-			if (ret < 0)
-				goto done;
+			/*
+			 * This will iterate the DMAs and the stream-on of
+			 * subdevs may not be sequential due to multiple
+			 * sub-graph path
+			 */
+			list_for_each_entry(dma, &xdev->dmas, list) {
+				ret = xvip_pipeline_start_stop(xdev, dma, true);
+				if (ret < 0)
+					goto done;
+			}
 		}
 		pipe->stream_count++;
 	} else {
 		if (--pipe->stream_count == 0)
-			xvip_pipeline_start_stop(pipe, false);
+			list_for_each_entry(dma, &xdev->dmas, list)
+				xvip_pipeline_start_stop(xdev, dma, false);
 	}
 
 done:
@@ -248,7 +273,6 @@ static int xvip_pipeline_validate(struct xvip_pipeline *pipe,
 		dma = to_xvip_dma(media_entity_to_video_device(entity));
 
 		if (dma->pad.flags & MEDIA_PAD_FL_SINK) {
-			pipe->output = dma;
 			num_outputs++;
 		} else {
 			num_inputs++;
@@ -259,11 +283,12 @@ static int xvip_pipeline_validate(struct xvip_pipeline *pipe,
 
 	media_graph_walk_cleanup(&graph);
 
-	/* We need exactly one output and zero or one input. */
-	if (num_outputs != 1 || num_inputs > 1)
+	/* We need at least one DMA to proceed */
+	if (num_outputs == 0 && num_inputs == 0)
 		return -EPIPE;
 
 	pipe->num_dmas = num_inputs + num_outputs;
+	pipe->xdev = start->xdev;
 
 	return 0;
 }
@@ -271,7 +296,6 @@ static int xvip_pipeline_validate(struct xvip_pipeline *pipe,
 static void __xvip_pipeline_cleanup(struct xvip_pipeline *pipe)
 {
 	pipe->num_dmas = 0;
-	pipe->output = NULL;
 }
 
 /**
@@ -334,11 +358,13 @@ done:
  * @buf: vb2 buffer base object
  * @queue: buffer list entry in the DMA engine queued buffers list
  * @dma: DMA channel that uses the buffer
+ * @desc: Descriptor associated with this structure
  */
 struct xvip_dma_buffer {
 	struct vb2_v4l2_buffer buf;
 	struct list_head queue;
 	struct xvip_dma *dma;
+	struct dma_async_tx_descriptor *desc;
 };
 
 #define to_xvip_dma_buffer(vb)	container_of(vb, struct xvip_dma_buffer, buf)
@@ -348,6 +374,8 @@ static void xvip_dma_complete(void *param)
 	struct xvip_dma_buffer *buf = param;
 	struct xvip_dma *dma = buf->dma;
 	int i, sizeimage;
+	u32 fid;
+	int status;
 
 	spin_lock(&dma->queued_lock);
 	list_del(&buf->queue);
@@ -356,6 +384,26 @@ static void xvip_dma_complete(void *param)
 	buf->buf.field = V4L2_FIELD_NONE;
 	buf->buf.sequence = dma->sequence++;
 	buf->buf.vb2_buf.timestamp = ktime_get_ns();
+
+	status = xilinx_xdma_get_fid(dma->dma, buf->desc, &fid);
+	if (!status) {
+		if (((V4L2_TYPE_IS_MULTIPLANAR(dma->format.type)) &&
+		     dma->format.fmt.pix_mp.field == V4L2_FIELD_ALTERNATE) ||
+		     dma->format.fmt.pix.field == V4L2_FIELD_ALTERNATE) {
+			/*
+			 * fid = 1 is odd field i.e. V4L2_FIELD_TOP.
+			 * fid = 0 is even field i.e. V4L2_FIELD_BOTTOM.
+			 */
+			buf->buf.field = fid ?
+					 V4L2_FIELD_TOP : V4L2_FIELD_BOTTOM;
+
+			if (fid == dma->prev_fid)
+				buf->buf.sequence = dma->sequence++;
+
+			buf->buf.sequence >>= 1;
+			dma->prev_fid = fid;
+		}
+	}
 
 	if (V4L2_TYPE_IS_MULTIPLANAR(dma->format.type)) {
 		for (i = 0; i < dma->fmtinfo->buffers; i++) {
@@ -435,6 +483,7 @@ static void xvip_dma_buffer_queue(struct vb2_buffer *vb)
 	u32 flags;
 	u32 luma_size;
 	u32 padding_factor_nume, padding_factor_deno, bpl_nume, bpl_deno;
+	u32 fid = ~0;
 
 	if (dma->queue.type == V4L2_BUF_TYPE_VIDEO_CAPTURE ||
 	    dma->queue.type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
@@ -498,6 +547,7 @@ static void xvip_dma_buffer_queue(struct vb2_buffer *vb)
 		struct v4l2_pix_format *pix;
 
 		pix = &dma->format.fmt.pix;
+		xilinx_xdma_v4l2_config(dma->dma, pix->pixelformat);
 		xvip_width_padding_factor(pix->pixelformat,
 					  &padding_factor_nume,
 					  &padding_factor_deno);
@@ -509,7 +559,7 @@ static void xvip_dma_buffer_queue(struct vb2_buffer *vb)
 				    (padding_factor_deno * bpl_deno);
 		dma->sgl[0].icg = pix->bytesperline - dma->sgl[0].size;
 		dma->xt.numf = pix->height;
-		dma->sgl[0].dst_icg = dma->sgl[0].size;
+		dma->sgl[0].dst_icg = 0;
 	}
 
 	desc = dmaengine_prep_interleaved_dma(dma->dma, &dma->xt, flags);
@@ -520,6 +570,16 @@ static void xvip_dma_buffer_queue(struct vb2_buffer *vb)
 	}
 	desc->callback = xvip_dma_complete;
 	desc->callback_param = buf;
+	buf->desc = desc;
+
+	if (buf->buf.field == V4L2_FIELD_TOP)
+		fid = 1;
+	else if (buf->buf.field == V4L2_FIELD_BOTTOM)
+		fid = 0;
+	else if (buf->buf.field == V4L2_FIELD_NONE)
+		fid = 0;
+
+	xilinx_xdma_set_fid(dma->dma, desc, fid);
 
 	spin_lock_irq(&dma->queued_lock);
 	list_add_tail(&buf->queue, &dma->queued_bufs);
@@ -539,6 +599,7 @@ static int xvip_dma_start_streaming(struct vb2_queue *vq, unsigned int count)
 	int ret;
 
 	dma->sequence = 0;
+	dma->prev_fid = ~0;
 
 	/*
 	 * Start streaming on the pipeline. No link touching an entity in the
@@ -571,7 +632,9 @@ static int xvip_dma_start_streaming(struct vb2_queue *vq, unsigned int count)
 	dma_async_issue_pending(dma->dma);
 
 	/* Start the pipeline. */
-	xvip_pipeline_set_stream(pipe, true);
+	ret = xvip_pipeline_set_stream(pipe, true);
+	if (ret < 0)
+		goto error_stop;
 
 	return 0;
 
@@ -580,6 +643,7 @@ error_stop:
 	media_pipeline_stop(&dma->video.entity);
 
 error:
+	dmaengine_terminate_all(dma->dma);
 	/* Give back all queued buffers to videobuf2. */
 	spin_lock_irq(&dma->queued_lock);
 	list_for_each_entry_safe(buf, nbuf, &dma->queued_bufs, queue) {
@@ -733,6 +797,8 @@ xvip_dma_enum_format(struct file *file, void *fh, struct v4l2_fmtdesc *f)
 		f->pixelformat = fmt->fourcc;
 		strlcpy(f->description, fmt->description,
 			sizeof(f->description));
+
+		return 0;
 	}
 
 	/* Single plane formats */
@@ -776,6 +842,30 @@ __xvip_dma_try_format(struct xvip_dma *dma,
 	unsigned int fourcc;
 	unsigned int padding_factor_nume, padding_factor_deno;
 	unsigned int bpl_nume, bpl_deno;
+	struct v4l2_subdev_format fmt;
+	struct v4l2_subdev *subdev;
+	int ret;
+
+	subdev = xvip_dma_remote_subdev(&dma->pad, &fmt.pad);
+	if (!subdev)
+		return;
+
+	fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+	ret = v4l2_subdev_call(subdev, pad, get_fmt, NULL, &fmt);
+	if (ret < 0)
+		return;
+
+	if (fmt.format.field == V4L2_FIELD_ALTERNATE) {
+		if (V4L2_TYPE_IS_MULTIPLANAR(dma->format.type))
+			dma->format.fmt.pix_mp.field = V4L2_FIELD_ALTERNATE;
+		else
+			dma->format.fmt.pix.field = V4L2_FIELD_ALTERNATE;
+	} else {
+		if (V4L2_TYPE_IS_MULTIPLANAR(dma->format.type))
+			dma->format.fmt.pix_mp.field = V4L2_FIELD_NONE;
+		else
+			dma->format.fmt.pix.field = V4L2_FIELD_NONE;
+	}
 
 	/* Retrieve format information and select the default format if the
 	 * requested format isn't supported.
@@ -808,12 +898,14 @@ __xvip_dma_try_format(struct xvip_dma *dma,
 
 		pix_mp = &format->fmt.pix_mp;
 		plane_fmt = pix_mp->plane_fmt;
-		pix_mp->field = V4L2_FIELD_NONE;
+		pix_mp->field = dma->format.fmt.pix_mp.field;
 		width = rounddown(pix_mp->width * info->bpl_factor, align);
 		pix_mp->width = clamp(width, min_width, max_width) /
 				info->bpl_factor;
 		pix_mp->height = clamp(pix_mp->height, XVIP_DMA_MIN_HEIGHT,
 				       XVIP_DMA_MAX_HEIGHT);
+		if (pix_mp->field == V4L2_FIELD_ALTERNATE)
+			pix_mp->height = pix_mp->height / 2;
 
 		/*
 		 * Clamp the requested bytes per line value. If the maximum
@@ -870,15 +962,20 @@ __xvip_dma_try_format(struct xvip_dma *dma,
 		struct v4l2_pix_format *pix;
 
 		pix = &format->fmt.pix;
-		pix->field = V4L2_FIELD_NONE;
-
+		pix->field = dma->format.fmt.pix.field;
 		width = rounddown(pix->width * info->bpl_factor, align);
 		pix->width = clamp(width, min_width, max_width) /
 			     info->bpl_factor;
 		pix->height = clamp(pix->height, XVIP_DMA_MIN_HEIGHT,
 				    XVIP_DMA_MAX_HEIGHT);
 
-		min_bpl = pix->width * info->bpl_factor;
+		if (pix->field == V4L2_FIELD_ALTERNATE)
+			pix->height = pix->height / 2;
+
+		min_bpl = (pix->width * info->bpl_factor *
+			  padding_factor_nume * bpl_nume) /
+			  (padding_factor_deno * bpl_deno);
+		min_bpl = roundup(min_bpl, dma->align);
 		max_bpl = rounddown(XVIP_DMA_MAX_WIDTH, dma->align);
 		bpl = rounddown(pix->bytesperline, dma->align);
 		pix->bytesperline = clamp(bpl, min_bpl, max_bpl);

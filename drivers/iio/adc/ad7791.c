@@ -176,7 +176,8 @@ static struct ad7791_state *ad_sigma_delta_to_ad7791(struct ad_sigma_delta *sd)
 	return container_of(sd, struct ad7791_state, sd);
 }
 
-static int ad7791_set_channel(struct ad_sigma_delta *sd, unsigned int channel)
+static int ad7791_set_channel(struct ad_sigma_delta *sd, unsigned int slot,
+	unsigned int channel)
 {
 	ad_sd_set_comm(sd, channel);
 
@@ -334,12 +335,20 @@ static const struct iio_info ad7791_no_filter_info = {
 static int ad7791_setup(struct ad7791_state *st,
 			struct ad7791_platform_data *pdata)
 {
+	int ret;
+
 	/* Set to poweron-reset default values */
 	st->mode = AD7791_MODE_BUFFER;
 	st->filter = AD7791_FILTER_RATE_16_6;
 
 	if (!pdata)
 		return 0;
+	/* reset the serial interface */
+	ret = -1;
+	ret = spi_write(st->sd.spi, (u8 *)&ret, sizeof(ret));
+	if (ret < 0)
+		return ret;
+	usleep_range(500, 2000); /* Wait for at least 500us */
 
 	if ((st->info->flags & AD7791_FLAG_HAS_BUFFER) && !pdata->buffered)
 		st->mode &= ~AD7791_MODE_BUFFER;

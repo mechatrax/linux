@@ -379,9 +379,9 @@ static bool mux_is_better_rate(unsigned long rate, unsigned long now,
 	return now <= rate && now > best;
 }
 
-static int
-clk_mux_determine_rate_flags(struct clk_hw *hw, struct clk_rate_request *req,
-			     unsigned long flags)
+int clk_mux_determine_rate_flags(struct clk_hw *hw,
+				 struct clk_rate_request *req,
+				 unsigned long flags)
 {
 	struct clk_core *core = hw->core, *parent, *best_parent = NULL;
 	int i, num_parents, ret;
@@ -441,6 +441,7 @@ out:
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(clk_mux_determine_rate_flags);
 
 struct clk *__clk_lookup(const char *name)
 {
@@ -1112,13 +1113,21 @@ static void __clk_recalc_rates(struct clk_core *core, unsigned long msg)
 static unsigned long clk_core_get_rate(struct clk_core *core)
 {
 	unsigned long rate;
+	struct clk_core *_clk, *recalc_clk = NULL;
 
 	clk_prepare_lock();
 
-	if (core && (core->flags & CLK_GET_RATE_NOCACHE))
-		__clk_recalc_rates(core, 0);
+	_clk = core;
+	while (_clk) {
+		if (_clk->flags & CLK_GET_RATE_NOCACHE)
+			recalc_clk = _clk;
+		_clk = _clk->parent;
+	}
 
-	rate = clk_core_get_rate_nolock(core);
+	if (recalc_clk)
+		__clk_recalc_rates(recalc_clk, 0);
+
+		rate = clk_core_get_rate_nolock(core);
 	clk_prepare_unlock();
 
 	return rate;
