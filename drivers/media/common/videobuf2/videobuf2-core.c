@@ -550,6 +550,20 @@ bool vb2_buffer_in_use(struct vb2_queue *q, struct vb2_buffer *vb)
 }
 EXPORT_SYMBOL(vb2_buffer_in_use);
 
+/*
+ * __buffers_in_use() - return true if any buffers on the queue are in use and
+ * the queue cannot be freed (by the means of REQBUFS(0)) call
+ */
+static bool __buffers_in_use(struct vb2_queue *q)
+{
+	unsigned int buffer;
+	for (buffer = 0; buffer < q->num_buffers; ++buffer) {
+		if (vb2_buffer_in_use(q, q->bufs[buffer]))
+			return true;
+	}
+	return false;
+}
+
 void vb2_core_querybuf(struct vb2_queue *q, unsigned int index, void *pb)
 {
 	call_void_bufop(q, fill_user_buffer, q->bufs[index], pb);
@@ -654,9 +668,21 @@ int vb2_core_reqbufs(struct vb2_queue *q, enum vb2_memory memory,
 		return -EBUSY;
 	}
 
+	if (q->waiting_in_dqbuf && *count) {
+		dprintk(1, "another dup()ped fd is waiting for a buffer\n");
+		return -EBUSY;
+	}
+
 	if (*count == 0 || q->num_buffers != 0 ||
 	    (q->memory != VB2_MEMORY_UNKNOWN && q->memory != memory)) {
+		/*
+		 * We already have buffers allocated, so first check if they
+		 * are not in use and can be freed.
+		 */
 		mutex_lock(&q->mmap_lock);
+		if (debug && q->memory == VB2_MEMORY_MMAP &&
+		    __buffers_in_use(q))
+			dprintk(1, "memory in use, orphaning buffers\n");
 
 		/*
 		 * Call queue_cancel to clean up any buffers in the PREPARED or
@@ -774,6 +800,10 @@ int vb2_core_create_bufs(struct vb2_queue *q, enum vb2_memory memory,
 	}
 
 	if (!q->num_buffers) {
+		if (q->waiting_in_dqbuf && *count) {
+			dprintk(1, "another dup()ped fd is waiting for a buffer\n");
+			return -EBUSY;
+		}
 		memset(q->alloc_devs, 0, sizeof(q->alloc_devs));
 		q->memory = memory;
 		q->waiting_for_buffers = !q->is_output;
@@ -1443,6 +1473,11 @@ static int __vb2_wait_for_done_vb(struct vb2_queue *q, int nonblocking)
 	for (;;) {
 		int ret;
 
+		if (q->waiting_in_dqbuf) {
+			dprintk(1, "another dup()ped fd is waiting for a buffer\n");
+			return -EBUSY;
+		}
+
 		if (!q->streaming) {
 			dprintk(1, "streaming off, will not wait for buffers\n");
 			return -EINVAL;
@@ -1470,6 +1505,7 @@ static int __vb2_wait_for_done_vb(struct vb2_queue *q, int nonblocking)
 			return -EAGAIN;
 		}
 
+		q->waiting_in_dqbuf = 1;
 		/*
 		 * We are streaming and blocking, wait for another buffer to
 		 * become ready or for streamoff. Driver's lock is released to
@@ -1490,6 +1526,7 @@ static int __vb2_wait_for_done_vb(struct vb2_queue *q, int nonblocking)
 		 * the locks or return an error if one occurred.
 		 */
 		call_void_qop(q, wait_finish, q);
+		q->waiting_in_dqbuf = 0;
 		if (ret) {
 			dprintk(1, "sleep was interrupted\n");
 			return ret;
@@ -2352,6 +2389,12 @@ static size_t __vb2_perform_fileio(struct vb2_queue *q, char __user *data, size_
 
 	if (!data)
 		return -EINVAL;
+
+	if (q->waiting_in_dqbuf) {
+		dprintk(3, "another dup()ped fd is %s\n",
+			read ? "reading" : "writing");
+		return -EBUSY;
+	}
 
 	/*
 	 * Initialize emulator on first call.
