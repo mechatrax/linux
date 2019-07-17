@@ -1,6 +1,7 @@
 /dts-v1/;
 
 #include "bcm2710.dtsi"
+#include "bcm2709-rpi.dtsi"
 #include "bcm283x-rpi-smsc9514.dtsi"
 #include "bcm283x-rpi-csi1-2lane.dtsi"
 
@@ -15,6 +16,7 @@
 	aliases {
 		serial0 = &uart1;
 		serial1 = &uart0;
+		mmc1 = &mmcnr;
 	};
 };
 
@@ -74,13 +76,11 @@
 	};
 };
 
-&mmc {
+&mmcnr {
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdio_pins>;
-	non-removable;
 	bus-width = <4>;
 	status = "okay";
-	brcm,overclock-50 = <0>;
 };
 
 &soc {

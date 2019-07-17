@@ -1,19 +1,15 @@
 /dts-v1/;
 
 #include "bcm2708.dtsi"
+#include "bcm2708-rpi.dtsi"
 #include "bcm283x-rpi-csi1-2lane.dtsi"
 
 / {
-	compatible = "raspberrypi,model-zero-w", "brcm,bcm2835";
-	model = "Raspberry Pi Zero W";
+	compatible = "raspberrypi,model-zero", "brcm,bcm2835";
+	model = "Raspberry Pi Zero";
 
 	chosen {
-		bootargs = "coherent_pool=1M 8250.nr_uarts=1";
-	};
-
-	aliases {
-		serial0 = &uart1;
-		serial1 = &uart0;
+		bootargs = "coherent_pool=1M";
 	};
 };
 
@@ -43,53 +39,13 @@
 		brcm,function = <4>; /* alt0 */
 	};
 
-	sdio_pins: sdio_pins {
-		brcm,pins = <34 35 36 37 38 39>;
-		brcm,function = <7>; /* ALT3 = SD1 */
-		brcm,pull = <0 2 2 2 2 2>;
-	};
-
-	bt_pins: bt_pins {
-		brcm,pins = <43>;
-		brcm,function = <4>; /* alt0:GPCLK2 */
-		brcm,pull = <0>; /* none */
-	};
-
-	uart0_pins: uart0_pins {
-		brcm,pins = <30 31 32 33>;
-		brcm,function = <7>; /* alt3=UART0 */
-		brcm,pull = <2 0 0 2>; /* up none none up */
-	};
-
-	uart1_pins: uart1_pins {
-		brcm,pins;
-		brcm,function;
-		brcm,pull;
-	};
-
 	audio_pins: audio_pins {
 		brcm,pins = <>;
 		brcm,function = <>;
 	};
 };
 
-&mmc {
-	pinctrl-names = "default";
-	pinctrl-0 = <&sdio_pins>;
-	non-removable;
-	bus-width = <4>;
-	status = "okay";
-};
-
 &uart0 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&uart0_pins &bt_pins>;
-	status = "okay";
-};
-
-&uart1 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&uart1_pins>;
 	status = "okay";
 };
 
@@ -132,13 +88,8 @@
 };
 
 &i2s {
-	#sound-dai-cells = <0>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2s_pins>;
-};
-
-&random {
-	status = "okay";
 };
 
 &leds {
