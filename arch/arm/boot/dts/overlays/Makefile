@@ -53,6 +53,7 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	hifiberry-dac.dtbo \
 	hifiberry-dacplus.dtbo \
 	hifiberry-dacplusadc.dtbo \
+	hifiberry-dacplusadcpro.dtbo \
 	hifiberry-digi.dtbo \
 	hifiberry-digi-pro.dtbo \
 	hy28a.dtbo \
@@ -66,7 +67,9 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	i2c-rtc.dtbo \
 	i2c-rtc-gpio.dtbo \
 	i2c-sensor.dtbo \
+	i2c0.dtbo \
 	i2c0-bcm2708.dtbo \
+	i2c1.dtbo \
 	i2c1-bcm2708.dtbo \
 	i2c3.dtbo \
 	i2c4.dtbo \
