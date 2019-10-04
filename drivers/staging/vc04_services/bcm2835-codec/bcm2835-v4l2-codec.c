@@ -77,7 +77,7 @@ enum bcm2835_codec_role {
 	ISP,
 };
 
-const static char *roles[] = {
+static const char * const roles[] = {
 	"decode",
 	"encode",
 	"isp"
@@ -92,7 +92,7 @@ static const char * const components[] = {
 #define MIN_W		32
 #define MIN_H		32
 #define MAX_W		1920
-#define MAX_H		1088
+#define MAX_H		1920
 #define BPL_ALIGN	32
 #define DEFAULT_WIDTH	640
 #define DEFAULT_HEIGHT	480
@@ -457,6 +457,9 @@ struct bcm2835_codec_ctx {
 };
 
 struct bcm2835_codec_driver {
+	struct platform_device *pdev;
+	struct media_device	mdev;
+
 	struct bcm2835_codec_dev *encode;
 	struct bcm2835_codec_dev *decode;
 	struct bcm2835_codec_dev *isp;
@@ -557,7 +560,7 @@ static struct vchiq_mmal_port *get_port_data(struct bcm2835_codec_ctx *ctx,
  * mem2mem callbacks
  */
 
-/**
+/*
  * job_ready() - check whether an instance is ready to be scheduled to run
  */
 static int job_ready(void *priv)
@@ -947,8 +950,10 @@ static void device_run(void *priv)
 static int vidioc_querycap(struct file *file, void *priv,
 			   struct v4l2_capability *cap)
 {
+	struct bcm2835_codec_dev *dev = video_drvdata(file);
+
 	strncpy(cap->driver, MEM2MEM_NAME, sizeof(cap->driver) - 1);
-	strncpy(cap->card, MEM2MEM_NAME, sizeof(cap->card) - 1);
+	strncpy(cap->card, dev->vfd.name, sizeof(cap->card) - 1);
 	snprintf(cap->bus_info, sizeof(cap->bus_info), "platform:%s",
 		 MEM2MEM_NAME);
 	return 0;
@@ -1050,12 +1055,12 @@ static int vidioc_try_fmt(struct bcm2835_codec_ctx *ctx, struct v4l2_format *f,
 			f->fmt.pix_mp.height = MIN_H;
 
 		/*
-		 * For codecs the buffer must have a vertical alignment of 16
+		 * For decoders the buffer must have a vertical alignment of 16
 		 * lines.
 		 * The selection will reflect any cropping rectangle when only
 		 * some of the pixels are active.
 		 */
-		if (ctx->dev->role != ISP)
+		if (ctx->dev->role == DECODE)
 			f->fmt.pix_mp.height = ALIGN(f->fmt.pix_mp.height, 16);
 	}
 	f->fmt.pix_mp.num_planes = 1;
@@ -1255,17 +1260,30 @@ static int vidioc_g_selection(struct file *file, void *priv,
 {
 	struct bcm2835_codec_ctx *ctx = file2ctx(file);
 	struct bcm2835_codec_q_data *q_data;
-	bool capture_queue = s->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE ?
-								true : false;
 
-	if ((ctx->dev->role == DECODE && !capture_queue) ||
-	    (ctx->dev->role == ENCODE && capture_queue))
-		/* OUTPUT on decoder and CAPTURE on encoder are not valid. */
+	/*
+	 * The selection API takes V4L2_BUF_TYPE_VIDEO_CAPTURE and
+	 * V4L2_BUF_TYPE_VIDEO_OUTPUT, even if the device implements the MPLANE
+	 * API. The V4L2 core will have converted the MPLANE variants to
+	 * non-MPLANE.
+	 * Open code this instead of using get_q_data in this case.
+	 */
+	switch (s->type) {
+	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
+		/* CAPTURE on encoder is not valid. */
+		if (ctx->dev->role == ENCODE)
+			return -EINVAL;
+		q_data = &ctx->q_data[V4L2_M2M_DST];
+		break;
+	case V4L2_BUF_TYPE_VIDEO_OUTPUT:
+		/* OUTPUT on deoder is not valid. */
+		if (ctx->dev->role == DECODE)
+			return -EINVAL;
+		q_data = &ctx->q_data[V4L2_M2M_SRC];
+		break;
+	default:
 		return -EINVAL;
-
-	q_data = get_q_data(ctx, s->type);
-	if (!q_data)
-		return -EINVAL;
+	}
 
 	switch (ctx->dev->role) {
 	case DECODE:
@@ -1318,21 +1336,35 @@ static int vidioc_s_selection(struct file *file, void *priv,
 {
 	struct bcm2835_codec_ctx *ctx = file2ctx(file);
 	struct bcm2835_codec_q_data *q_data = NULL;
-	bool capture_queue = s->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE ?
-								true : false;
+
+	/*
+	 * The selection API takes V4L2_BUF_TYPE_VIDEO_CAPTURE and
+	 * V4L2_BUF_TYPE_VIDEO_OUTPUT, even if the device implements the MPLANE
+	 * API. The V4L2 core will have converted the MPLANE variants to
+	 * non-MPLANE.
+	 *
+	 * Open code this instead of using get_q_data in this case.
+	 */
+	switch (s->type) {
+	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
+		/* CAPTURE on encoder is not valid. */
+		if (ctx->dev->role == ENCODE)
+			return -EINVAL;
+		q_data = &ctx->q_data[V4L2_M2M_DST];
+		break;
+	case V4L2_BUF_TYPE_VIDEO_OUTPUT:
+		/* OUTPUT on deoder is not valid. */
+		if (ctx->dev->role == DECODE)
+			return -EINVAL;
+		q_data = &ctx->q_data[V4L2_M2M_SRC];
+		break;
+	default:
+		return -EINVAL;
+	}
 
 	v4l2_dbg(1, debug, &ctx->dev->v4l2_dev, "%s: ctx %p, type %d, q_data %p, target %d, rect x/y %d/%d, w/h %ux%u\n",
 		 __func__, ctx, s->type, q_data, s->target, s->r.left, s->r.top,
 		 s->r.width, s->r.height);
-
-	if ((ctx->dev->role == DECODE && !capture_queue) ||
-	    (ctx->dev->role == ENCODE && capture_queue))
-		/* OUTPUT on decoder and CAPTURE on encoder are not valid. */
-		return -EINVAL;
-
-	q_data = get_q_data(ctx, s->type);
-	if (!q_data)
-		return -EINVAL;
 
 	switch (ctx->dev->role) {
 	case DECODE:
@@ -1586,6 +1618,20 @@ static int bcm2835_codec_s_ctrl(struct v4l2_ctrl *ctrl)
 
 		ret = bcm2835_codec_set_level_profile(ctx, ctrl);
 		break;
+
+	case V4L2_CID_MPEG_VIDEO_FORCE_KEY_FRAME: {
+		u32 mmal_bool = 1;
+
+		if (!ctx->component)
+			break;
+
+		ret = vchiq_mmal_port_parameter_set(ctx->dev->instance,
+						    &ctx->component->output[0],
+						    MMAL_PARAMETER_VIDEO_REQUEST_I_FRAME,
+						    &mmal_bool,
+						    sizeof(mmal_bool));
+		break;
+	}
 
 	default:
 		v4l2_err(&ctx->dev->v4l2_dev, "Invalid control\n");
@@ -2311,7 +2357,7 @@ static int bcm2835_codec_open(struct file *file)
 	hdl = &ctx->hdl;
 	if (dev->role == ENCODE) {
 		/* Encode controls */
-		v4l2_ctrl_handler_init(hdl, 6);
+		v4l2_ctrl_handler_init(hdl, 7);
 
 		v4l2_ctrl_new_std_menu(hdl, &bcm2835_codec_ctrl_ops,
 				       V4L2_CID_MPEG_VIDEO_BITRATE_MODE,
@@ -2355,6 +2401,9 @@ static int bcm2835_codec_open(struct file *file)
 					 BIT(V4L2_MPEG_VIDEO_H264_PROFILE_MAIN) |
 					 BIT(V4L2_MPEG_VIDEO_H264_PROFILE_HIGH)),
 					V4L2_MPEG_VIDEO_H264_PROFILE_HIGH);
+		v4l2_ctrl_new_std(hdl, &bcm2835_codec_ctrl_ops,
+				  V4L2_CID_MPEG_VIDEO_FORCE_KEY_FRAME,
+				  0, 0, 0, 0);
 		if (hdl->error) {
 			rc = hdl->error;
 			goto free_ctrl_handler;
@@ -2568,12 +2617,14 @@ destroy_component:
 	return ret;
 }
 
-static int bcm2835_codec_create(struct platform_device *pdev,
+static int bcm2835_codec_create(struct bcm2835_codec_driver *drv,
 				struct bcm2835_codec_dev **new_dev,
 				enum bcm2835_codec_role role)
 {
+	struct platform_device *pdev = drv->pdev;
 	struct bcm2835_codec_dev *dev;
 	struct video_device *vfd;
+	int function;
 	int video_nr;
 	int ret;
 
@@ -2593,18 +2644,21 @@ static int bcm2835_codec_create(struct platform_device *pdev,
 	if (ret)
 		goto vchiq_finalise;
 
-	ret = v4l2_device_register(&pdev->dev, &dev->v4l2_dev);
-	if (ret)
-		goto vchiq_finalise;
-
 	atomic_set(&dev->num_inst, 0);
 	mutex_init(&dev->dev_mutex);
 
+	/* Initialise the video device */
 	dev->vfd = bcm2835_codec_videodev;
+
 	vfd = &dev->vfd;
 	vfd->lock = &dev->dev_mutex;
 	vfd->v4l2_dev = &dev->v4l2_dev;
 	vfd->device_caps = V4L2_CAP_VIDEO_M2M_MPLANE | V4L2_CAP_STREAMING;
+	vfd->v4l2_dev->mdev = &drv->mdev;
+
+	ret = v4l2_device_register(&pdev->dev, &dev->v4l2_dev);
+	if (ret)
+		goto vchiq_finalise;
 
 	switch (role) {
 	case DECODE:
@@ -2612,11 +2666,13 @@ static int bcm2835_codec_create(struct platform_device *pdev,
 		v4l2_disable_ioctl(vfd, VIDIOC_TRY_ENCODER_CMD);
 		v4l2_disable_ioctl(vfd, VIDIOC_S_PARM);
 		v4l2_disable_ioctl(vfd, VIDIOC_G_PARM);
+		function = MEDIA_ENT_F_PROC_VIDEO_DECODER;
 		video_nr = decode_video_nr;
 		break;
 	case ENCODE:
 		v4l2_disable_ioctl(vfd, VIDIOC_DECODER_CMD);
 		v4l2_disable_ioctl(vfd, VIDIOC_TRY_DECODER_CMD);
+		function = MEDIA_ENT_F_PROC_VIDEO_ENCODER;
 		video_nr = encode_video_nr;
 		break;
 	case ISP:
@@ -2626,6 +2682,7 @@ static int bcm2835_codec_create(struct platform_device *pdev,
 		v4l2_disable_ioctl(vfd, VIDIOC_TRY_DECODER_CMD);
 		v4l2_disable_ioctl(vfd, VIDIOC_S_PARM);
 		v4l2_disable_ioctl(vfd, VIDIOC_G_PARM);
+		function = MEDIA_ENT_F_PROC_VIDEO_SCALER;
 		video_nr = isp_video_nr;
 		break;
 	default:
@@ -2640,8 +2697,8 @@ static int bcm2835_codec_create(struct platform_device *pdev,
 	}
 
 	video_set_drvdata(vfd, dev);
-	snprintf(vfd->name, sizeof(vfd->name), "%s",
-		 bcm2835_codec_videodev.name);
+	snprintf(vfd->name, sizeof(vfd->name), "%s-%s",
+		 bcm2835_codec_videodev.name, roles[role]);
 	v4l2_info(&dev->v4l2_dev, "Device registered as /dev/video%d\n",
 		  vfd->num);
 
@@ -2653,6 +2710,10 @@ static int bcm2835_codec_create(struct platform_device *pdev,
 		ret = PTR_ERR(dev->m2m_dev);
 		goto err_m2m;
 	}
+
+	ret = v4l2_m2m_register_media_controller(dev->m2m_dev, vfd, function);
+	if (ret)
+		goto err_m2m;
 
 	v4l2_info(&dev->v4l2_dev, "Loaded V4L2 %s\n",
 		  roles[role]);
@@ -2675,6 +2736,7 @@ static int bcm2835_codec_destroy(struct bcm2835_codec_dev *dev)
 
 	v4l2_info(&dev->v4l2_dev, "Removing " MEM2MEM_NAME ", %s\n",
 		  roles[dev->role]);
+	v4l2_m2m_unregister_media_controller(dev->m2m_dev);
 	v4l2_m2m_release(dev->m2m_dev);
 	video_unregister_device(&dev->vfd);
 	v4l2_device_unregister(&dev->v4l2_dev);
@@ -2686,22 +2748,40 @@ static int bcm2835_codec_destroy(struct bcm2835_codec_dev *dev)
 static int bcm2835_codec_probe(struct platform_device *pdev)
 {
 	struct bcm2835_codec_driver *drv;
+	struct media_device *mdev;
 	int ret = 0;
 
 	drv = devm_kzalloc(&pdev->dev, sizeof(*drv), GFP_KERNEL);
 	if (!drv)
 		return -ENOMEM;
 
-	ret = bcm2835_codec_create(pdev, &drv->decode, DECODE);
+	drv->pdev = pdev;
+	mdev = &drv->mdev;
+	mdev->dev = &pdev->dev;
+
+	strscpy(mdev->model, bcm2835_codec_videodev.name, sizeof(mdev->model));
+	strscpy(mdev->serial, "0000", sizeof(mdev->serial));
+	snprintf(mdev->bus_info, sizeof(mdev->bus_info), "platform:%s",
+		 pdev->name);
+
+	/* This should return the vgencmd version information or such .. */
+	mdev->hw_revision = 1;
+	media_device_init(mdev);
+
+	ret = bcm2835_codec_create(drv, &drv->decode, DECODE);
 	if (ret)
 		goto out;
 
-	ret = bcm2835_codec_create(pdev, &drv->encode, ENCODE);
+	ret = bcm2835_codec_create(drv, &drv->encode, ENCODE);
 	if (ret)
 		goto out;
 
-	ret = bcm2835_codec_create(pdev, &drv->isp, ISP);
+	ret = bcm2835_codec_create(drv, &drv->isp, ISP);
 	if (ret)
+		goto out;
+
+	/* Register the media device node */
+	if (media_device_register(mdev) < 0)
 		goto out;
 
 	platform_set_drvdata(pdev, drv);
@@ -2724,11 +2804,15 @@ static int bcm2835_codec_remove(struct platform_device *pdev)
 {
 	struct bcm2835_codec_driver *drv = platform_get_drvdata(pdev);
 
+	media_device_unregister(&drv->mdev);
+
 	bcm2835_codec_destroy(drv->isp);
 
 	bcm2835_codec_destroy(drv->encode);
 
 	bcm2835_codec_destroy(drv->decode);
+
+	media_device_cleanup(&drv->mdev);
 
 	return 0;
 }
