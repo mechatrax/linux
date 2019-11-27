@@ -15,6 +15,7 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	allo-katana-dac-audio.dtbo \
 	allo-piano-dac-pcm512x-audio.dtbo \
 	allo-piano-dac-plus-pcm512x-audio.dtbo \
+	apds9960.dtbo \
 	applepi-dac.dtbo \
 	at86rf233.dtbo \
 	audioinjector-addons.dtbo \
@@ -83,6 +84,7 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	iqaudio-dac.dtbo \
 	iqaudio-dacplus.dtbo \
 	iqaudio-digi-wm8804-audio.dtbo \
+	irs1125.dtbo \
 	jedec-spi-nor.dtbo \
 	justboom-dac.dtbo \
 	justboom-digi.dtbo \
@@ -183,6 +185,7 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	vga666.dtbo \
 	w1-gpio.dtbo \
 	w1-gpio-pullup.dtbo \
+	w5500.dtbo \
 	wittypi.dtbo
 
 targets += dtbs dtbs_install
