@@ -37,7 +37,7 @@
 #define AD7793_REG_IO		5 /* IO Register	     (RO, 8-bit) */
 #define AD7793_REG_OFFSET	6 /* Offset Register	     (RW, 16-bit
 				   * (AD7792)/24-bit (AD7793)) */
-#define AD7793_REG_FULLSALE	7 /* Full-Scale Register
+#define AD7793_REG_FULLSCALE	7 /* Full-Scale Register
 				   * (RW, 16-bit (AD7792)/24-bit (AD7793)) */
 
 /* Communications Register Bit Designations (AD7793_REG_COMM) */
@@ -95,9 +95,9 @@
 #define AD7793_CH_TEMP		6 /* Temp Sensor */
 #define AD7793_CH_AVDD_MONITOR	7 /* AVDD Monitor */
 
-#define AD7795_CH_AIN4P_AIN4M	4 /* AIN4(+) - AIN4(-) */
-#define AD7795_CH_AIN5P_AIN5M	5 /* AIN5(+) - AIN5(-) */
-#define AD7795_CH_AIN6P_AIN6M	6 /* AIN6(+) - AIN6(-) */
+#define AD7795_CH_AIN4P_AIN4M	3 /* AIN4(+) - AIN4(-) */
+#define AD7795_CH_AIN5P_AIN5M	4 /* AIN5(+) - AIN5(-) */
+#define AD7795_CH_AIN6P_AIN6M	5 /* AIN6(+) - AIN6(-) */
 #define AD7795_CH_AIN1M_AIN1M	8 /* AIN1(-) - AIN1(-) */
 
 /* ID Register Bit Designations (AD7793_REG_ID) */
@@ -158,6 +158,7 @@ struct ad7793_chip_info {
 	const struct iio_chan_spec *channels;
 	unsigned int num_channels;
 	unsigned int flags;
+	unsigned int num_calib_pairs;
 
 	const struct iio_info *iio_info;
 	const u16 *sample_freq_avail;
@@ -221,19 +222,21 @@ static const struct ad_sigma_delta_info ad7793_sigma_delta_info = {
 	.read_mask = BIT(6),
 };
 
-static const struct ad_sd_calib_data ad7793_calib_arr[6] = {
+static const struct ad_sd_calib_data ad7793_calib_arr[8] = {
 	{AD7793_MODE_CAL_INT_ZERO, AD7793_CH_AIN1P_AIN1M},
 	{AD7793_MODE_CAL_INT_FULL, AD7793_CH_AIN1P_AIN1M},
 	{AD7793_MODE_CAL_INT_ZERO, AD7793_CH_AIN2P_AIN2M},
 	{AD7793_MODE_CAL_INT_FULL, AD7793_CH_AIN2P_AIN2M},
 	{AD7793_MODE_CAL_INT_ZERO, AD7793_CH_AIN3P_AIN3M},
-	{AD7793_MODE_CAL_INT_FULL, AD7793_CH_AIN3P_AIN3M}
+	{AD7793_MODE_CAL_INT_FULL, AD7793_CH_AIN3P_AIN3M},
+	{AD7793_MODE_CAL_INT_ZERO, AD7795_CH_AIN4P_AIN4M},
+	{AD7793_MODE_CAL_INT_FULL, AD7795_CH_AIN4P_AIN4M},
 };
 
 static int ad7793_calibrate_all(struct ad7793_state *st)
 {
 	return ad_sd_calibrate_all(&st->sd, ad7793_calib_arr,
-				   ARRAY_SIZE(ad7793_calib_arr));
+				   st->chip_info->num_calib_pairs * 2);
 }
 
 static int ad7793_check_platform_data(struct ad7793_state *st,
@@ -605,8 +608,8 @@ const struct iio_chan_spec _name##_channels[] = { \
 static DECLARE_AD7793_CHANNELS(ad7785, 20, 32, 4);
 static DECLARE_AD7793_CHANNELS(ad7792, 16, 32, 0);
 static DECLARE_AD7793_CHANNELS(ad7793, 24, 32, 0);
-static DECLARE_AD7795_CHANNELS(ad7794, 16, 32);
-static DECLARE_AD7795_CHANNELS(ad7795, 24, 32);
+static DECLARE_AD7795_CHANNELS(ad7794, 24, 32);
+static DECLARE_AD7795_CHANNELS(ad7795, 16, 32);
 static DECLARE_AD7797_CHANNELS(ad7796, 16, 16);
 static DECLARE_AD7797_CHANNELS(ad7797, 24, 32);
 static DECLARE_AD7799_CHANNELS(ad7798, 16, 16);
@@ -625,6 +628,7 @@ static const struct ad7793_chip_info ad7793_chip_info_tbl[] = {
 			AD7793_HAS_EXITATION_CURRENT |
 			AD7793_FLAG_HAS_GAIN |
 			AD7793_FLAG_HAS_BUFFER,
+		.num_calib_pairs = 3,
 	},
 	[ID_AD7792] = {
 		.id = AD7792_ID,
@@ -638,6 +642,7 @@ static const struct ad7793_chip_info ad7793_chip_info_tbl[] = {
 			AD7793_HAS_EXITATION_CURRENT |
 			AD7793_FLAG_HAS_GAIN |
 			AD7793_FLAG_HAS_BUFFER,
+		.num_calib_pairs = 3,
 	},
 	[ID_AD7793] = {
 		.id = AD7793_ID,
@@ -651,6 +656,7 @@ static const struct ad7793_chip_info ad7793_chip_info_tbl[] = {
 			AD7793_HAS_EXITATION_CURRENT |
 			AD7793_FLAG_HAS_GAIN |
 			AD7793_FLAG_HAS_BUFFER,
+		.num_calib_pairs = 3,
 	},
 	[ID_AD7794] = {
 		.id = AD7794_ID,
@@ -664,6 +670,7 @@ static const struct ad7793_chip_info ad7793_chip_info_tbl[] = {
 			AD7793_HAS_EXITATION_CURRENT |
 			AD7793_FLAG_HAS_GAIN |
 			AD7793_FLAG_HAS_BUFFER,
+		.num_calib_pairs = 4,
 	},
 	[ID_AD7795] = {
 		.id = AD7795_ID,
@@ -677,6 +684,7 @@ static const struct ad7793_chip_info ad7793_chip_info_tbl[] = {
 			AD7793_HAS_EXITATION_CURRENT |
 			AD7793_FLAG_HAS_GAIN |
 			AD7793_FLAG_HAS_BUFFER,
+		.num_calib_pairs = 4,
 	},
 	[ID_AD7796] = {
 		.id = AD7796_ID,
@@ -685,6 +693,7 @@ static const struct ad7793_chip_info ad7793_chip_info_tbl[] = {
 		.iio_info = &ad7797_info,
 		.sample_freq_avail = ad7797_sample_freq_avail,
 		.flags = AD7793_FLAG_HAS_CLKSEL,
+		.num_calib_pairs = 1,
 	},
 	[ID_AD7797] = {
 		.id = AD7797_ID,
@@ -693,6 +702,7 @@ static const struct ad7793_chip_info ad7793_chip_info_tbl[] = {
 		.iio_info = &ad7797_info,
 		.sample_freq_avail = ad7797_sample_freq_avail,
 		.flags = AD7793_FLAG_HAS_CLKSEL,
+		.num_calib_pairs = 1,
 	},
 	[ID_AD7798] = {
 		.id = AD7798_ID,
@@ -702,6 +712,7 @@ static const struct ad7793_chip_info ad7793_chip_info_tbl[] = {
 		.sample_freq_avail = ad7793_sample_freq_avail,
 		.flags = AD7793_FLAG_HAS_GAIN |
 			AD7793_FLAG_HAS_BUFFER,
+		.num_calib_pairs = 3,
 	},
 	[ID_AD7799] = {
 		.id = AD7799_ID,
@@ -711,6 +722,7 @@ static const struct ad7793_chip_info ad7793_chip_info_tbl[] = {
 		.sample_freq_avail = ad7793_sample_freq_avail,
 		.flags = AD7793_FLAG_HAS_GAIN |
 			AD7793_FLAG_HAS_BUFFER,
+		.num_calib_pairs = 3,
 	},
 };
 
