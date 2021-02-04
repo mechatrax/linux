@@ -147,6 +147,7 @@ static struct ad7793_platform_data ad7793_default_pdata = {
 	.boost_enable = false,
 	.buffered = true,
 	.unipolar = true,
+	.user_calibration = false,
 	.refsel = AD7793_REFSEL_INTERNAL,
 	.bias_voltage = AD7793_BIAS_VOLTAGE_DISABLED,
 	.exitation_current = AD7793_IX_DISABLED,
@@ -171,6 +172,7 @@ struct ad7793_state {
 	u16				mode;
 	u16				conf;
 	u32				scale_avail[8][2];
+	bool				user_calibration;
 
 	struct ad_sigma_delta		sd;
 
@@ -321,7 +323,7 @@ static int ad7793_setup(struct iio_dev *indio_dev,
 	if (!(st->chip_info->flags & AD7793_FLAG_HAS_GAIN))
 		st->conf |= AD7793_CONF_GAIN(7);
 
-	ret = ad7793_set_mode(&st->sd, AD_SD_MODE_IDLE);
+	ret = ad7793_set_mode(&st->sd, AD7793_MODE_IDLE);
 	if (ret)
 		goto out;
 
@@ -337,9 +339,11 @@ static int ad7793_setup(struct iio_dev *indio_dev,
 			goto out;
 	}
 
-	ret = ad7793_calibrate_all(st);
-	if (ret)
-		goto out;
+	if (!pdata->user_calibration) {
+		ret = ad7793_calibrate_all(st);
+		if (ret)
+			goto out;
+	}
 
 	/* Populate available ADC input ranges */
 	for (i = 0; i < ARRAY_SIZE(st->scale_avail); i++) {
@@ -426,7 +430,6 @@ static int ad7793_read_raw(struct iio_dev *indio_dev,
 			return ret;
 
 		return IIO_VAL_INT;
-
 	case IIO_CHAN_INFO_SCALE:
 		switch (chan->type) {
 		case IIO_VOLTAGE:
@@ -473,8 +476,42 @@ static int ad7793_read_raw(struct iio_dev *indio_dev,
 		*val = st->chip_info
 			       ->sample_freq_avail[AD7793_MODE_RATE(st->mode)];
 		return IIO_VAL_INT;
+	case IIO_CHAN_INFO_CALIBBIAS:
+		ret = iio_device_claim_direct_mode(indio_dev);
+		if (ret < 0)
+			return ret;
+
+		ret = ad7793_set_channel(&st->sd, chan->address);
+		if (ret < 0)
+			break;
+
+		ret = ad_sd_read_reg(&st->sd, AD7793_REG_OFFSET,
+			DIV_ROUND_UP(chan->scan_type.realbits
+			+ chan->scan_type.shift, 8), val);
+		break;
+	case IIO_CHAN_INFO_CALIBSCALE:
+		ret = iio_device_claim_direct_mode(indio_dev);
+		if (ret < 0)
+			return ret;
+
+		ret = ad7793_set_channel(&st->sd, chan->address);
+		if (ret < 0)
+			break;
+
+		ret = ad_sd_read_reg(&st->sd, AD7793_REG_FULLSCALE,
+			DIV_ROUND_UP(chan->scan_type.realbits
+			+ chan->scan_type.shift, 8), val);
+		break;
+
+	default:
+		return -EINVAL;
 	}
-	return -EINVAL;
+
+	iio_device_release_direct_mode(indio_dev);
+	if (ret)
+		return ret;
+
+	return IIO_VAL_INT;
 }
 
 static int ad7793_write_raw(struct iio_dev *indio_dev,
@@ -506,7 +543,10 @@ static int ad7793_write_raw(struct iio_dev *indio_dev,
 
 				ad_sd_write_reg(&st->sd, AD7793_REG_CONF,
 						sizeof(st->conf), st->conf);
-				ad7793_calibrate_all(st);
+
+				if (!st->user_calibration)
+					ad7793_calibrate_all(st);
+
 				break;
 			}
 		break;
@@ -529,6 +569,32 @@ static int ad7793_write_raw(struct iio_dev *indio_dev,
 		st->mode |= AD7793_MODE_RATE(i);
 		ad_sd_write_reg(&st->sd, AD7793_REG_MODE, sizeof(st->mode),
 				st->mode);
+		break;
+	case IIO_CHAN_INFO_CALIBBIAS:
+		ret = ad7793_set_mode(&st->sd, AD7793_MODE_IDLE);
+		if (ret < 0)
+			break;
+
+		ret = ad7793_set_channel(&st->sd, chan->address);
+		if (ret < 0)
+			break;
+
+		ret = ad_sd_write_reg(&st->sd, AD7793_REG_OFFSET,
+			DIV_ROUND_UP(chan->scan_type.realbits
+			+ chan->scan_type.shift, 8), val);
+		break;
+	case IIO_CHAN_INFO_CALIBSCALE:
+		ret = ad7793_set_mode(&st->sd, AD7793_MODE_IDLE);
+		if (ret < 0)
+			break;
+
+		ret = ad7793_set_channel(&st->sd, chan->address);
+		if (ret < 0)
+			break;
+
+		ret = ad_sd_write_reg(&st->sd, AD7793_REG_FULLSCALE,
+			DIV_ROUND_UP(chan->scan_type.realbits
+			+ chan->scan_type.shift, 8), val);
 		break;
 	default:
 		ret = -EINVAL;
@@ -628,6 +694,48 @@ static const struct iio_info ad7797_info = {
 		0, \
 		BIT(IIO_CHAN_INFO_SAMP_FREQ))
 
+#define __AD7793_CHANNEL_WITH_CALIB(_si, _channel1, _channel2, _address, \
+	_bits, _storagebits, _shift, _extend_name, _type, \
+	_mask_type_av, _mask_all) \
+	{ \
+		.type = (_type), \
+		.differential = (_channel2 == -1 ? 0 : 1), \
+		.indexed = 1, \
+		.channel = (_channel1), \
+		.channel2 = (_channel2), \
+		.address = (_address), \
+		.extend_name = (_extend_name), \
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) | \
+			BIT(IIO_CHAN_INFO_OFFSET) | \
+			BIT(IIO_CHAN_INFO_CALIBSCALE) | \
+			BIT(IIO_CHAN_INFO_CALIBBIAS), \
+		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE), \
+		.info_mask_shared_by_type_available = (_mask_type_av), \
+		.info_mask_shared_by_all = _mask_all, \
+		.scan_index = (_si), \
+		.scan_type = { \
+			.sign = 'u', \
+			.realbits = (_bits), \
+			.storagebits = (_storagebits), \
+			.shift = (_shift), \
+			.endianness = IIO_BE, \
+		}, \
+	}
+
+#define AD7793_DIFF_CHANNEL_WITH_CALIB(_si, _channel1, _channel2, _address, \
+	_bits, _storagebits, _shift) \
+	__AD7793_CHANNEL_WITH_CALIB(_si, _channel1, _channel2, _address, \
+		_bits, _storagebits, _shift, NULL, IIO_VOLTAGE, \
+		BIT(IIO_CHAN_INFO_SCALE), \
+		BIT(IIO_CHAN_INFO_SAMP_FREQ))
+
+#define AD7793_CHANNEL_WITH_CALIB(_si, _channel, _address, \
+	_bits, _storagebits, _shift) \
+	__AD7793_CHANNEL_WITH_CALIB(_si, _channel, -1, _address, \
+		_bits, _storagebits, _shift, NULL, IIO_VOLTAGE, \
+		BIT(IIO_CHAN_INFO_SCALE), \
+		BIT(IIO_CHAN_INFO_SAMP_FREQ))
+
 #define DECLARE_AD7793_CHANNELS(_name, _b, _sb, _s) \
 const struct iio_chan_spec _name##_channels[] = { \
 	AD7793_DIFF_CHANNEL(0, 0, 0, AD7793_CH_AIN1P_AIN1M, (_b), (_sb), (_s)), \
@@ -672,6 +780,63 @@ const struct iio_chan_spec _name##_channels[] = { \
 	IIO_CHAN_SOFT_TIMESTAMP(5), \
 }
 
+#define DECLARE_AD7793_CHANNELS_WITH_CALIB(_name, _b, _sb, _s) \
+const struct iio_chan_spec _name##_channels_with_calib[] = { \
+	AD7793_DIFF_CHANNEL_WITH_CALIB(0, 0, 0, AD7793_CH_AIN1P_AIN1M, \
+		(_b), (_sb), (_s)), \
+	AD7793_DIFF_CHANNEL_WITH_CALIB(1, 1, 1, AD7793_CH_AIN2P_AIN2M, \
+		(_b), (_sb), (_s)), \
+	AD7793_DIFF_CHANNEL_WITH_CALIB(2, 2, 2, AD7793_CH_AIN3P_AIN3M, \
+		(_b), (_sb), (_s)), \
+	AD7793_SHORTED_CHANNEL(3, 0, AD7793_CH_AIN1M_AIN1M, (_b), (_sb), (_s)), \
+	AD7793_TEMP_CHANNEL(4, AD7793_CH_TEMP, (_b), (_sb), (_s)), \
+	AD7793_SUPPLY_CHANNEL(5, 3, AD7793_CH_AVDD_MONITOR, (_b), (_sb), (_s)), \
+	IIO_CHAN_SOFT_TIMESTAMP(6), \
+}
+
+#define DECLARE_AD7795_CHANNELS_WITH_CALIB(_name, _b, _sb) \
+const struct iio_chan_spec _name##_channels_with_calib[] = { \
+	AD7793_DIFF_CHANNEL_WITH_CALIB(0, 0, 0, AD7793_CH_AIN1P_AIN1M, \
+		(_b), (_sb), 0), \
+	AD7793_DIFF_CHANNEL_WITH_CALIB(1, 1, 1, AD7793_CH_AIN2P_AIN2M, \
+		(_b), (_sb), 0), \
+	AD7793_DIFF_CHANNEL_WITH_CALIB(2, 2, 2, AD7793_CH_AIN3P_AIN3M, \
+		(_b), (_sb), 0), \
+	AD7793_DIFF_CHANNEL_WITH_CALIB(3, 3, 3, AD7795_CH_AIN4P_AIN4M, \
+		(_b), (_sb), 0), \
+	AD7793_DIFF_CHANNEL_WITH_CALIB(4, 4, 4, AD7795_CH_AIN5P_AIN5M, \
+		(_b), (_sb), 0), \
+	AD7793_DIFF_CHANNEL_WITH_CALIB(5, 5, 5, AD7795_CH_AIN6P_AIN6M, \
+		(_b), (_sb), 0), \
+	AD7793_SHORTED_CHANNEL(6, 0, AD7795_CH_AIN1M_AIN1M, (_b), (_sb), 0), \
+	AD7793_TEMP_CHANNEL(7, AD7793_CH_TEMP, (_b), (_sb), 0), \
+	AD7793_SUPPLY_CHANNEL(8, 3, AD7793_CH_AVDD_MONITOR, (_b), (_sb), 0), \
+	IIO_CHAN_SOFT_TIMESTAMP(9), \
+}
+
+#define DECLARE_AD7797_CHANNELS_WITH_CALIB(_name, _b, _sb) \
+const struct iio_chan_spec _name##_channels_with_calib[] = { \
+	AD7793_DIFF_CHANNEL_WITH_CALIB(0, 0, 0, AD7793_CH_AIN1P_AIN1M, \
+		(_b), (_sb), 0), \
+	AD7793_SHORTED_CHANNEL(1, 0, AD7793_CH_AIN1M_AIN1M, (_b), (_sb), 0), \
+	AD7793_TEMP_CHANNEL(2, AD7793_CH_TEMP, (_b), (_sb), 0), \
+	AD7793_SUPPLY_CHANNEL(3, 3, AD7793_CH_AVDD_MONITOR, (_b), (_sb), 0), \
+	IIO_CHAN_SOFT_TIMESTAMP(4), \
+}
+
+#define DECLARE_AD7799_CHANNELS_WITH_CALIB(_name, _b, _sb) \
+const struct iio_chan_spec _name##_channels_with_calib[] = { \
+	AD7793_DIFF_CHANNEL_WITH_CALIB(0, 0, 0, AD7793_CH_AIN1P_AIN1M, \
+		(_b), (_sb), 0), \
+	AD7793_DIFF_CHANNEL_WITH_CALIB(1, 1, 1, AD7793_CH_AIN2P_AIN2M, \
+		(_b), (_sb), 0), \
+	AD7793_DIFF_CHANNEL_WITH_CALIB(2, 2, 2, AD7793_CH_AIN3P_AIN3M, \
+		(_b), (_sb), 0), \
+	AD7793_SHORTED_CHANNEL(3, 0, AD7793_CH_AIN1M_AIN1M, (_b), (_sb), 0), \
+	AD7793_SUPPLY_CHANNEL(4, 3, AD7793_CH_AVDD_MONITOR, (_b), (_sb), 0), \
+	IIO_CHAN_SOFT_TIMESTAMP(5), \
+}
+
 static DECLARE_AD7793_CHANNELS(ad7785, 20, 32, 4);
 static DECLARE_AD7793_CHANNELS(ad7792, 16, 32, 0);
 static DECLARE_AD7793_CHANNELS(ad7793, 24, 32, 0);
@@ -681,6 +846,15 @@ static DECLARE_AD7797_CHANNELS(ad7796, 16, 16);
 static DECLARE_AD7797_CHANNELS(ad7797, 24, 32);
 static DECLARE_AD7799_CHANNELS(ad7798, 16, 16);
 static DECLARE_AD7799_CHANNELS(ad7799, 24, 32);
+static DECLARE_AD7793_CHANNELS_WITH_CALIB(ad7785, 20, 32, 4);
+static DECLARE_AD7793_CHANNELS_WITH_CALIB(ad7792, 16, 32, 0);
+static DECLARE_AD7793_CHANNELS_WITH_CALIB(ad7793, 24, 32, 0);
+static DECLARE_AD7795_CHANNELS_WITH_CALIB(ad7794, 24, 32);
+static DECLARE_AD7795_CHANNELS_WITH_CALIB(ad7795, 16, 32);
+static DECLARE_AD7797_CHANNELS_WITH_CALIB(ad7796, 16, 16);
+static DECLARE_AD7797_CHANNELS_WITH_CALIB(ad7797, 24, 32);
+static DECLARE_AD7799_CHANNELS_WITH_CALIB(ad7798, 16, 16);
+static DECLARE_AD7799_CHANNELS_WITH_CALIB(ad7799, 24, 32);
 
 static const struct ad7793_chip_info ad7793_chip_info_tbl[] = {
 	[ID_AD7785] = {
@@ -793,6 +967,117 @@ static const struct ad7793_chip_info ad7793_chip_info_tbl[] = {
 	},
 };
 
+static const struct ad7793_chip_info ad7793_chip_info_with_calib_tbl[] = {
+	[ID_AD7785] = {
+		.id = AD7785_ID,
+		.channels = ad7785_channels_with_calib,
+		.num_channels = ARRAY_SIZE(ad7785_channels),
+		.iio_info = &ad7793_info,
+		.sample_freq_avail = ad7793_sample_freq_avail,
+		.flags = AD7793_FLAG_HAS_CLKSEL |
+			AD7793_FLAG_HAS_REFSEL |
+			AD7793_FLAG_HAS_VBIAS |
+			AD7793_HAS_EXITATION_CURRENT |
+			AD7793_FLAG_HAS_GAIN |
+			AD7793_FLAG_HAS_BUFFER,
+		.num_calib_pairs = 3,
+	},
+	[ID_AD7792] = {
+		.id = AD7792_ID,
+		.channels = ad7792_channels_with_calib,
+		.num_channels = ARRAY_SIZE(ad7792_channels),
+		.iio_info = &ad7793_info,
+		.sample_freq_avail = ad7793_sample_freq_avail,
+		.flags = AD7793_FLAG_HAS_CLKSEL |
+			AD7793_FLAG_HAS_REFSEL |
+			AD7793_FLAG_HAS_VBIAS |
+			AD7793_HAS_EXITATION_CURRENT |
+			AD7793_FLAG_HAS_GAIN |
+			AD7793_FLAG_HAS_BUFFER,
+		.num_calib_pairs = 3,
+	},
+	[ID_AD7793] = {
+		.id = AD7793_ID,
+		.channels = ad7793_channels_with_calib,
+		.num_channels = ARRAY_SIZE(ad7793_channels),
+		.iio_info = &ad7793_info,
+		.sample_freq_avail = ad7793_sample_freq_avail,
+		.flags = AD7793_FLAG_HAS_CLKSEL |
+			AD7793_FLAG_HAS_REFSEL |
+			AD7793_FLAG_HAS_VBIAS |
+			AD7793_HAS_EXITATION_CURRENT |
+			AD7793_FLAG_HAS_GAIN |
+			AD7793_FLAG_HAS_BUFFER,
+		.num_calib_pairs = 3,
+	},
+	[ID_AD7794] = {
+		.id = AD7794_ID,
+		.channels = ad7794_channels_with_calib,
+		.num_channels = ARRAY_SIZE(ad7794_channels),
+		.iio_info = &ad7793_info,
+		.sample_freq_avail = ad7793_sample_freq_avail,
+		.flags = AD7793_FLAG_HAS_CLKSEL |
+			AD7793_FLAG_HAS_REFSEL |
+			AD7793_FLAG_HAS_VBIAS |
+			AD7793_HAS_EXITATION_CURRENT |
+			AD7793_FLAG_HAS_GAIN |
+			AD7793_FLAG_HAS_BUFFER,
+		.num_calib_pairs = 4,
+	},
+	[ID_AD7795] = {
+		.id = AD7795_ID,
+		.channels = ad7795_channels_with_calib,
+		.num_channels = ARRAY_SIZE(ad7795_channels),
+		.iio_info = &ad7793_info,
+		.sample_freq_avail = ad7793_sample_freq_avail,
+		.flags = AD7793_FLAG_HAS_CLKSEL |
+			AD7793_FLAG_HAS_REFSEL |
+			AD7793_FLAG_HAS_VBIAS |
+			AD7793_HAS_EXITATION_CURRENT |
+			AD7793_FLAG_HAS_GAIN |
+			AD7793_FLAG_HAS_BUFFER,
+		.num_calib_pairs = 4,
+	},
+	[ID_AD7796] = {
+		.id = AD7796_ID,
+		.channels = ad7796_channels_with_calib,
+		.num_channels = ARRAY_SIZE(ad7796_channels),
+		.iio_info = &ad7797_info,
+		.sample_freq_avail = ad7797_sample_freq_avail,
+		.flags = AD7793_FLAG_HAS_CLKSEL,
+		.num_calib_pairs = 1,
+	},
+	[ID_AD7797] = {
+		.id = AD7797_ID,
+		.channels = ad7797_channels_with_calib,
+		.num_channels = ARRAY_SIZE(ad7797_channels),
+		.iio_info = &ad7797_info,
+		.sample_freq_avail = ad7797_sample_freq_avail,
+		.flags = AD7793_FLAG_HAS_CLKSEL,
+		.num_calib_pairs = 1,
+	},
+	[ID_AD7798] = {
+		.id = AD7798_ID,
+		.channels = ad7798_channels_with_calib,
+		.num_channels = ARRAY_SIZE(ad7798_channels),
+		.iio_info = &ad7793_info,
+		.sample_freq_avail = ad7793_sample_freq_avail,
+		.flags = AD7793_FLAG_HAS_GAIN |
+			AD7793_FLAG_HAS_BUFFER,
+		.num_calib_pairs = 3,
+	},
+	[ID_AD7799] = {
+		.id = AD7799_ID,
+		.channels = ad7799_channels_with_calib,
+		.num_channels = ARRAY_SIZE(ad7799_channels),
+		.iio_info = &ad7793_info,
+		.sample_freq_avail = ad7793_sample_freq_avail,
+		.flags = AD7793_FLAG_HAS_GAIN |
+			AD7793_FLAG_HAS_BUFFER,
+		.num_calib_pairs = 3,
+	},
+};
+
 #ifdef CONFIG_OF
 static struct ad7793_platform_data *ad7793_parse_dt(struct device *dev)
 {
@@ -813,6 +1098,7 @@ static struct ad7793_platform_data *ad7793_parse_dt(struct device *dev)
 	pdata->boost_enable = of_property_read_bool(np, "adi,boost-enable");
 	pdata->buffered = of_property_read_bool(np, "adi,buffered-mode-enable");
 	pdata->unipolar = of_property_read_bool(np, "adi,unipolar-mode-enable");
+	pdata->user_calibration = of_property_read_bool(np, "adi,user-calibration-enable");
 	tmp = AD7793_REFSEL_INTERNAL;
 	of_property_read_u32(np, "adi,reference-select", &tmp);
 	pdata->refsel = tmp;
@@ -886,8 +1172,14 @@ static int ad7793_probe(struct spi_device *spi)
 		vref_mv = 1170; /* Build-in ref */
 	}
 
-	st->chip_info =
-		&ad7793_chip_info_tbl[spi_get_device_id(spi)->driver_data];
+	st->user_calibration = pdata->user_calibration;
+
+	if (st->user_calibration)
+		st->chip_info =
+			&ad7793_chip_info_with_calib_tbl[spi_get_device_id(spi)->driver_data];
+	else
+		st->chip_info =
+			&ad7793_chip_info_tbl[spi_get_device_id(spi)->driver_data];
 
 	spi_set_drvdata(spi, indio_dev);
 
