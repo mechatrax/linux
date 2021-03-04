@@ -130,6 +130,9 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	pibell.dtbo \
 	pifacedigital.dtbo \
 	pifi-40.dtbo \
+	pifi-dac-hd.dtbo \
+	pifi-dac-zero.dtbo \
+	pifi-mini-210.dtbo \
 	piglow.dtbo \
 	piscreen.dtbo \
 	piscreen2r.dtbo \
@@ -210,6 +213,7 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	vc4-kms-kippah-7inch.dtbo \
 	vc4-kms-v3d.dtbo \
 	vc4-kms-v3d-pi4.dtbo \
+	vc4-kms-vga666.dtbo \
 	vga666.dtbo \
 	w1-gpio.dtbo \
 	w1-gpio-pullup.dtbo \
