@@ -1206,7 +1206,7 @@ static int ad7793_probe(struct spi_device *spi)
 error_remove_trigger:
 	ad_sd_cleanup_buffer_and_trigger(indio_dev);
 error_disable_reg:
-	if (pdata->refsel != AD7793_REFSEL_INTERNAL)
+	if (!IS_ERR_OR_NULL(st->reg))
 		regulator_disable(st->reg);
 
 	return ret;
@@ -1214,14 +1214,13 @@ error_disable_reg:
 
 static int ad7793_remove(struct spi_device *spi)
 {
-	const struct ad7793_platform_data *pdata = spi->dev.platform_data;
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
 	struct ad7793_state *st = iio_priv(indio_dev);
 
 	iio_device_unregister(indio_dev);
 	ad_sd_cleanup_buffer_and_trigger(indio_dev);
 
-	if (pdata->refsel != AD7793_REFSEL_INTERNAL)
+	if (!IS_ERR_OR_NULL(st->reg))
 		regulator_disable(st->reg);
 
 	return 0;
