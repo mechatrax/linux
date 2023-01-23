@@ -9,6 +9,10 @@
 		bcm2711;
 	};
 
+	disable-emmc2 {
+		bcm2711;
+	};
+
 	highperi {
 		bcm2711;
 	};
@@ -75,6 +79,10 @@
 
 	pi3-miniuart-bt {
 		renamed = "miniuart-bt";
+	};
+
+	pwm1 {
+		bcm2711;
 	};
 
 	ramoops {
