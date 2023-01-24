@@ -1,4 +1,4 @@
-name: Pi kernel build tests
+name: Pi kernel build
 
 on:
   pull_request:
@@ -47,6 +47,11 @@ jobs:
         cp ${{github.workspace}}/build/arch/arm/boot/dts/overlays/*.dtb* ${{github.workspace}}/install/boot/overlays/
         cp ${{github.workspace}}/arch/arm/boot/dts/overlays/README ${{github.workspace}}/install/boot/overlays/
         cp ${{github.workspace}}/build/arch/arm/boot/zImage ${{github.workspace}}/install/boot/kernel.img
+        mkdir -p ${{github.workspace}}/install/extra
+        cp ${{github.workspace}}/build/System.map ${{github.workspace}}/install/extra/System.map
+        cp ${{github.workspace}}/build/Module.symvers ${{github.workspace}}/install/extra/Module.symvers
+        strings ${{github.workspace}}/build/vmlinux | grep "^Linux version" > ${{github.workspace}}/install/extra/uname_string
+        git show -s --format=%H > ${{github.workspace}}/install/extra/git_hash
 
     - name: Tar build
       run: tar -cvf bcmrpi_build.tar -C ${{github.workspace}}/install .
@@ -89,6 +94,11 @@ jobs:
         cp ${{github.workspace}}/build/arch/arm/boot/dts/overlays/*.dtb* ${{github.workspace}}/install/boot/overlays/
         cp ${{github.workspace}}/arch/arm/boot/dts/overlays/README ${{github.workspace}}/install/boot/overlays/
         cp ${{github.workspace}}/build/arch/arm/boot/zImage ${{github.workspace}}/install/boot/kernel7.img
+        mkdir -p ${{github.workspace}}/install/extra
+        cp ${{github.workspace}}/build/System.map ${{github.workspace}}/install/extra/System7.map
+        cp ${{github.workspace}}/build/Module.symvers ${{github.workspace}}/install/extra/Module7.symvers
+        strings ${{github.workspace}}/build/vmlinux | grep "^Linux version" > ${{github.workspace}}/install/extra/uname_string7
+        git show -s --format=%H > ${{github.workspace}}/install/extra/git_hash
 
     - name: Tar build
       run: tar -cvf bcm2709_build.tar -C ${{github.workspace}}/install .
@@ -131,6 +141,11 @@ jobs:
         cp ${{github.workspace}}/build/arch/arm/boot/dts/overlays/*.dtb* ${{github.workspace}}/install/boot/overlays/
         cp ${{github.workspace}}/arch/arm/boot/dts/overlays/README ${{github.workspace}}/install/boot/overlays/
         cp ${{github.workspace}}/build/arch/arm/boot/zImage ${{github.workspace}}/install/boot/kernel7l.img
+        mkdir -p ${{github.workspace}}/install/extra
+        cp ${{github.workspace}}/build/System.map ${{github.workspace}}/install/extra/System7l.map
+        cp ${{github.workspace}}/build/Module.symvers ${{github.workspace}}/install/extra/Module7l.symvers
+        strings ${{github.workspace}}/build/vmlinux | grep "^Linux version" > ${{github.workspace}}/install/extra/uname_string7l
+        git show -s --format=%H > ${{github.workspace}}/install/extra/git_hash
 
     - name: Tar build
       run: tar -cvf bcm2711_build.tar -C ${{github.workspace}}/install .
@@ -183,6 +198,11 @@ jobs:
         cp ${{github.workspace}}/build/arch/arm64/boot/dts/overlays/*.dtb* ${{github.workspace}}/install/boot/overlays/
         cp ${{github.workspace}}/arch/arm64/boot/dts/overlays/README ${{github.workspace}}/install/boot/overlays/
         cp ${{github.workspace}}/build/arch/arm64/boot/Image.gz ${{github.workspace}}/install/boot/kernel8.img
+        mkdir -p ${{github.workspace}}/install/extra
+        cp ${{github.workspace}}/build/System.map ${{github.workspace}}/install/extra/System8.map
+        cp ${{github.workspace}}/build/Module.symvers ${{github.workspace}}/install/extra/Module8.symvers
+        strings ${{github.workspace}}/build/vmlinux | grep "^Linux version" > ${{github.workspace}}/install/extra/uname_string8
+        git show -s --format=%H > ${{github.workspace}}/install/extra/git_hash
 
     - name: Tar build
       run: tar -cvf bcm2711_arm64_build.tar -C ${{github.workspace}}/install .
