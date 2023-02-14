@@ -61,7 +61,6 @@ jobs:
       with:
         name: bcmrpi_build
         path: bcmrpi_build.tar
-        retention-days: 7
 
   build-bcm2709:
 
@@ -108,7 +107,6 @@ jobs:
       with:
         name: bcm2709_build
         path: bcm2709_build.tar
-        retention-days: 7
 
   build-bcm2711:
 
@@ -155,7 +153,6 @@ jobs:
       with:
         name: bcm2711_build
         path: bcm2711_build.tar
-        retention-days: 7
 
   build-bcm2711-arm64:
 
@@ -212,4 +209,3 @@ jobs:
       with:
         name: bcm2711_arm64_build
         path: bcm2711_arm64_build.tar
-        retention-days: 7
