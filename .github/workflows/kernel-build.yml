@@ -1,14 +1,12 @@
-name: Pi kernel build tests
+name: Pi kernel build
 
 on:
   pull_request:
-    paths-ignore:
-      - '.github/**'
-    branches: [ "rpi-*" ]
+    branches: [ "mtx-*" ]
+
   push:
-    paths-ignore:
-      - '.github/**'
-    branches: [ "rpi-*" ]
+    branches: [ "mtx-*" ]
+
   workflow_dispatch:
 
 env:
@@ -20,35 +18,25 @@ jobs:
     strategy:
       matrix:
         include:
-          - name: bcm2835
-            arch: arm
-            defconfig: bcm2835_defconfig
-            kernel: kernel
-
-          - name: arm64
-            arch: arm64
-            defconfig: defconfig
-            kernel: kernel8
-
           - name: bcmrpi
             arch: arm
             defconfig: bcmrpi_defconfig
-            kernel: kernel
+            suffix: ${{ null }}
 
           - name: bcm2709
             arch: arm
             defconfig: bcm2709_defconfig
-            kernel: kernel7
+            suffix: 7
 
           - name: bcm2711
             arch: arm
             defconfig: bcm2711_defconfig
-            kernel: kernel7l
+            suffix: 7l
 
           - name: bcm2711_arm64
             arch: arm64
             defconfig: bcm2711_defconfig
-            kernel: kernel8
+            suffix: 8
 
     steps:
     - name: Update install
@@ -90,7 +78,12 @@ jobs:
         cp ${{github.workspace}}/build/arch/${ARCH}/boot/dts/${DTS_SUBDIR}/*.dtb ${{github.workspace}}/install/boot/
         cp ${{github.workspace}}/build/arch/${ARCH}/boot/dts/overlays/*.dtb* ${{github.workspace}}/install/boot/overlays/
         cp ${{github.workspace}}/arch/${ARCH}/boot/dts/overlays/README ${{github.workspace}}/install/boot/overlays/
-        cp ${{github.workspace}}/build/arch/${ARCH}/boot/$IMAGE ${{github.workspace}}/install/boot/${{matrix.kernel}}.img
+        cp ${{github.workspace}}/build/arch/${ARCH}/boot/$IMAGE ${{github.workspace}}/install/boot/kernel${{matrix.suffix}}.img
+        mkdir -p ${{github.workspace}}/install/extra
+        cp ${{github.workspace}}/build/System.map ${{github.workspace}}/install/extra/System.map
+        cp ${{github.workspace}}/build/Module.symvers ${{github.workspace}}/install/extra/Module${{matrix.suffix}}.symvers
+        strings ${{github.workspace}}/build/vmlinux | grep "^Linux version.*#[1-9]" > ${{github.workspace}}/install/extra/uname_string${{matrix.suffix}}
+        git show -s --format=%H > ${{github.workspace}}/install/extra/git_hash
 
     - name: Tar build
       run: tar -cvf ${{matrix.name}}_build.tar -C ${{github.workspace}}/install .
